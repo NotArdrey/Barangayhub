@@ -867,152 +867,157 @@ $recentActivities = $res ? $res['total'] : 0;
 
   <!-- Add Document Request Modal -->
   <div id="addDocRequestModal" class="modal">
-    <div class="modal-content">
-      <h2 class="text-2xl font-bold mb-4">Add New Document Request</h2>
-      <form method="POST" action="../functions/document_request.php" id="addDocRequestForm">
-        <div class="mb-4">
-          <label class="block text-gray-700">Document Type</label>
-          <select name="document_type" id="documentType" class="w-full p-2 border rounded" required>
-            <option value="">Select Document</option>
-            <?php
-            $stmt = $pdo->prepare("SELECT document_type_id, document_name FROM DocumentType");
-            $stmt->execute();
-            $documentTypes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($documentTypes as $docType) {
-                $dataType = strtolower(str_replace(' ', '', $docType['document_name']));
-                echo "<option value='" . $docType['document_type_id'] . "' data-type='" . $dataType . "'>" . htmlspecialchars($docType['document_name']) . "</option>";
-            }
-            ?>
-          </select>
-        </div>
-        <!-- Optional: New Person Details -->
-        <div class="mb-4">
-          <p class="text-gray-700 font-semibold">New Person Details (if not already registered)</p>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label class="block text-gray-700">First Name</label>
-              <input type="text" name="person_first_name" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Middle Name</label>
-              <input type="text" name="person_middle_name" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Last Name</label>
-              <input type="text" name="person_last_name" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Birth Date</label>
-              <input type="date" name="person_birth_date" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Gender</label>
-              <select name="person_gender" class="w-full p-2 border rounded">
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Others">Others</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-gray-700">Email</label>
-              <input type="email" name="person_email" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Contact Number</label>
-              <input type="text" name="person_contact_number" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Marital Status</label>
-              <select name="person_marital_status" class="w-full p-2 border rounded">
-                <option value="Single">Single</option>
-                <option value="Married">Married</option>
-                <option value="Widowed">Widowed</option>
-                <option value="Separated">Separated</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-gray-700">Senior/PWD</label>
-              <select name="person_senior_or_pwd" class="w-full p-2 border rounded">
-                <option value="None">None</option>
-                <option value="Senior Citizen">Senior Citizen</option>
-                <option value="PWD">PWD</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-gray-700">Solo Parent</label>
-              <select name="person_solo_parent" class="w-full p-2 border rounded">
-                <option value="No">No</option>
-                <option value="Yes">Yes</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-gray-700">Emergency Contact Name</label>
-              <input type="text" name="person_emergency_contact_name" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Emergency Contact Number</label>
-              <input type="text" name="person_emergency_contact_number" class="w-full p-2 border rounded">
-            </div>
-            <div>
-              <label class="block text-gray-700">Emergency Contact Address</label>
-              <input type="text" name="person_emergency_contact_address" class="w-full p-2 border rounded">
-            </div>
+  <div class="modal-content">
+    <h2 class="text-2xl font-bold mb-4">Add New Document Request</h2>
+    <form method="POST" action="../functions/document_request.php" id="addDocRequestForm">
+      <!-- Document Type Selection -->
+      <div class="mb-4">
+        <label class="block text-gray-700">Document Type</label>
+        <select name="document_type" id="documentType" class="w-full p-2 border rounded" required>
+          <option value="">Select Document</option>
+          <?php
+          $stmt = $pdo->prepare("SELECT document_type_id, document_name FROM DocumentType");
+          $stmt->execute();
+          $documentTypes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+          foreach ($documentTypes as $docType) {
+              // Create a data-type by removing spaces and converting to lowercase.
+              $dataType = strtolower(str_replace(' ', '', $docType['document_name']));
+              echo "<option value='" . $docType['document_type_id'] . "' data-type='" . $dataType . "'>" . htmlspecialchars($docType['document_name']) . "</option>";
+          }
+          ?>
+        </select>
+      </div>
+      
+      <!-- Optional: New Person Details if not already registered -->
+      <div class="mb-4">
+        <p class="text-gray-700 font-semibold">New Person Details (if not already registered)</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-gray-700">First Name</label>
+            <input type="text" name="person_first_name" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Middle Name</label>
+            <input type="text" name="person_middle_name" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Last Name</label>
+            <input type="text" name="person_last_name" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Birth Date</label>
+            <input type="date" name="person_birth_date" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Gender</label>
+            <select name="person_gender" class="w-full p-2 border rounded">
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Others">Others</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-gray-700">Email</label>
+            <input type="email" name="person_email" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Contact Number</label>
+            <input type="text" name="person_contact_number" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Marital Status</label>
+            <select name="person_marital_status" class="w-full p-2 border rounded">
+              <option value="Single">Single</option>
+              <option value="Married">Married</option>
+              <option value="Widowed">Widowed</option>
+              <option value="Separated">Separated</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-gray-700">Senior/PWD</label>
+            <select name="person_senior_or_pwd" class="w-full p-2 border rounded">
+              <option value="None">None</option>
+              <option value="Senior Citizen">Senior Citizen</option>
+              <option value="PWD">PWD</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-gray-700">Solo Parent</label>
+            <select name="person_solo_parent" class="w-full p-2 border rounded">
+              <option value="No">No</option>
+              <option value="Yes">Yes</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-gray-700">Emergency Contact Name</label>
+            <input type="text" name="person_emergency_contact_name" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Emergency Contact Number</label>
+            <input type="text" name="person_emergency_contact_number" class="w-full p-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-gray-700">Emergency Contact Address</label>
+            <input type="text" name="person_emergency_contact_address" class="w-full p-2 border rounded">
           </div>
         </div>
-        <!-- Optional: Existing Person ID -->
-        <div class="mb-4">
-          <label class="block text-gray-700">Existing Person ID (optional)</label>
-          <input type="number" name="person_id" class="w-full p-2 border rounded">
-        </div>
-        <!-- Conditional Document Specific Fields -->
+      </div>
+      
+      <!-- Document Specific Fields Section (Step 3) -->
+      <div class="form-step" id="step-3">
+        <!-- Barangay Clearance Fields -->
         <div id="barangayclearanceFields" class="doc-fields" style="display:none;">
-          <div class="mb-4">
-            <label class="block text-gray-700">Clearance Purpose</label>
-            <input type="text" name="clearance_purpose" class="w-full p-2 border rounded">
+          <div class="form-row mb-4">
+            <label for="purposeClearance" class="block text-gray-700">Purpose</label>
+            <input type="text" name="purposeClearance" id="purposeClearance" placeholder="Enter purpose for Barangay Clearance" class="w-full p-2 border rounded" required>
           </div>
         </div>
+        <!-- Proof of Residency Fields -->
         <div id="proofofresidencyFields" class="doc-fields" style="display:none;">
-          <div class="mb-4">
-            <label class="block text-gray-700">Residency Duration</label>
-            <input type="text" name="residency_duration" class="w-full p-2 border rounded">
+          <div class="form-row mb-4">
+            <label for="residencyDuration" class="block text-gray-700">Duration of Residency</label>
+            <input type="text" name="residencyDuration" id="residencyDuration" placeholder="Enter duration of residency" class="w-full p-2 border rounded" required>
           </div>
-          <div class="mb-4">
-            <label class="block text-gray-700">Residency Purpose</label>
-            <input type="text" name="residency_purpose" class="w-full p-2 border rounded">
+          <div class="form-row mb-4">
+            <label for="residencyPurpose" class="block text-gray-700">Purpose</label>
+            <input type="text" name="residencyPurpose" id="residencyPurpose" placeholder="Enter purpose for Proof of Residency" class="w-full p-2 border rounded" required>
           </div>
         </div>
+        <!-- Good Moral Certificate Fields -->
         <div id="goodmoralcertificateFields" class="doc-fields" style="display:none;">
-          <div class="mb-4">
-            <label class="block text-gray-700">GMC Purpose</label>
-            <input type="text" name="gmc_purpose" class="w-full p-2 border rounded">
+          <div class="form-row mb-4">
+            <label for="gmcPurpose" class="block text-gray-700">Purpose</label>
+            <input type="text" name="gmcPurpose" id="gmcPurpose" placeholder="Enter purpose for Good Moral Certificate" class="w-full p-2 border rounded" required>
           </div>
         </div>
-        <div id="indigencycertificateFields" class="doc-fields" style="display:none;">
-          <div class="mb-4">
-            <label class="block text-gray-700">NIC Reason</label>
-            <input type="text" name="nic_reason" class="w-full p-2 border rounded">
-          </div>
-          <div class="mb-4">
-            <label class="block text-gray-700">Indigency Income</label>
-            <input type="number" step="0.01" name="indigency_income" class="w-full p-2 border rounded">
-          </div>
-          <div class="mb-4">
-            <label class="block text-gray-700">Indigency Reason</label>
-            <input type="text" name="indigency_reason" class="w-full p-2 border rounded">
+        <!-- No Income Certification Fields -->
+        <div id="noincomecertificationFields" class="doc-fields" style="display:none;">
+          <div class="form-row mb-4">
+            <label for="nicReason" class="block text-gray-700">Reason for Request</label>
+            <input type="text" name="nicReason" id="nicReason" placeholder="Enter reason for No Income Certification" class="w-full p-2 border rounded" required>
           </div>
         </div>
-        <!-- Common Field: Remarks -->
-        <div class="mb-4">
-          <label class="block text-gray-700">Remarks</label>
-          <textarea name="remarks" class="w-full p-2 border rounded" rows="4"></textarea>
+        <!-- Barangay Indigency Fields -->
+        <div id="barangayindigencyFields" class="doc-fields" style="display:none;">
+          <div class="form-row mb-4">
+            <label for="indigencyIncome" class="block text-gray-700">Monthly Income</label>
+            <input type="text" name="indigencyIncome" id="indigencyIncome" placeholder="Enter Monthly Income" class="w-full p-2 border rounded" required>
+          </div>
+          <div class="form-row mb-4">
+            <label for="indigencyReason" class="block text-gray-700">Reason for Indigency</label>
+            <input type="text" name="indigencyReason" id="indigencyReason" placeholder="Enter reason for Indigency" class="w-full p-2 border rounded" required>
+          </div>
         </div>
-        <div class="flex justify-end">
-          <button type="button" class="closeModal px-4 py-2 bg-gray-500 text-white rounded mr-2">Cancel</button>
-          <button type="submit" name="document_request_submit" class="px-4 py-2 bg-green-600 text-white rounded">Submit Request</button>
-        </div>
-      </form>
-    </div>
+      </div>
+      
+      <!-- Form Buttons -->
+      <div class="mt-4 flex justify-end">
+        <button type="button" class="closeModal px-4 py-2 bg-gray-500 text-white rounded mr-2">Cancel</button>
+        <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded">Submit Request</button>
+      </div>
+    </form>
   </div>
+</div>
 
   <!-- View Document Request Modal -->
   <div id="viewDocRequestModal" class="modal">
@@ -1163,16 +1168,22 @@ $recentActivities = $res ? $res['total'] : 0;
 
       // Document Request: Show/hide conditional fields based on Document Type selection
       document.getElementById('documentType').addEventListener('change', function() {
+        // Retrieve the data-type of the selected option.
         var selectedType = this.options[this.selectedIndex].getAttribute('data-type');
+        // Hide all document-specific field containers.
         document.querySelectorAll('.doc-fields').forEach(div => div.style.display = 'none');
+        
+        // Display the container corresponding to the selected document type.
         if (selectedType === 'barangayclearance') {
-            document.getElementById('barangayclearanceFields').style.display = 'block';
+          document.getElementById('barangayclearanceFields').style.display = 'block';
         } else if (selectedType === 'proofofresidency') {
-            document.getElementById('proofofresidencyFields').style.display = 'block';
+          document.getElementById('proofofresidencyFields').style.display = 'block';
         } else if (selectedType === 'goodmoralcertificate') {
-            document.getElementById('goodmoralcertificateFields').style.display = 'block';
-        } else if (selectedType === 'indigencycertificate') {
-            document.getElementById('indigencycertificateFields').style.display = 'block';
+          document.getElementById('goodmoralcertificateFields').style.display = 'block';
+        } else if (selectedType === 'noincomecertification') {
+          document.getElementById('noincomecertificationFields').style.display = 'block';
+        } else if (selectedType === 'barangayindigency') {
+          document.getElementById('barangayindigencyFields').style.display = 'block';
         }
       });
 

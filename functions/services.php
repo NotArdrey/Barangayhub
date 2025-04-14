@@ -2,19 +2,13 @@
 session_start();
 require "../config/dbconn.php"; 
 
-// Ensure user is logged in (i.e. is a document requester)
+// Ensure user is logged in
 if (!isset($_SESSION['user_id'])) {
     header("Location: ../pages/index.php");
     exit;
 }
 
-// Create connection
-$conn = new mysqli($servername, $dbUsername, $dbPassword, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
-// Process file upload for government ID image (for the certificate subject)
+// Process file upload for government ID image
 $idImagePath = "";
 if (isset($_FILES['uploadId']) && $_FILES['uploadId']['error'] == UPLOAD_ERR_OK) {
     $uploadDir = "uploads/";
@@ -29,7 +23,7 @@ if (isset($_FILES['uploadId']) && $_FILES['uploadId']['error'] == UPLOAD_ERR_OK)
         die("Error: Failed to move uploaded file.");
     }
 } else {
-    die("Error: File upload error (" . $_FILES['uploadId']['error'] . ").");
+    die("Error: File upload error (" . ($_FILES['uploadId']['error'] ?? 'No file uploaded') . ").");
 }
 
 // Begin transaction to ensure all inserts succeed or none do
@@ -37,23 +31,21 @@ $conn->begin_transaction();
 
 try {
     /***************** Insert Certificate Subject into Person Table *****************/
-    // Retrieve certificate subject information from form inputs
-    $firstName   = trim($_POST['firstName']);
-    $middleName  = trim($_POST['middleName']);
-    $lastName    = trim($_POST['lastName']);
-    $birthDate   = $_POST['birthday'];
-    $gender      = $_POST['gender'];
-    $email       = $_POST['email'];
-    $contactNumber = $_POST['contactNumber'];
-    $maritalStatus = $_POST['maritalStatus'];
-    $seniorOrPwd   = isset($_POST['seniorOrPwd']) ? $_POST['seniorOrPwd'] : "None";
-    $soloParent    = isset($_POST['soloParent']) ? $_POST['soloParent'] : "No";
-    $emergencyName = $_POST['emergencyName'];
+    $firstName    = trim($_POST['firstName']);
+    $middleName   = trim($_POST['middleName']);
+    $lastName     = trim($_POST['lastName']);
+    $birthDate    = $_POST['birthday'];
+    $gender       = $_POST['gender'];
+    $email        = $_POST['email'];
+    $contactNumber= $_POST['contactNumber'];
+    $maritalStatus= $_POST['maritalStatus'];
+    $seniorOrPwd  = isset($_POST['seniorOrPwd']) ? $_POST['seniorOrPwd'] : "None";
+    $soloParent   = isset($_POST['soloParent']) ? $_POST['soloParent'] : "No";
+    $emergencyName= $_POST['emergencyName'];
     $emergencyNumber = $_POST['emergencyNumber'];
-    $emergencyAddress = $_POST['emergencyAddress'];
-    $barangay_id   = intval($_POST['barangay']);
+    $emergencyAddress= $_POST['emergencyAddress'];
+    $barangay_id  = intval($_POST['barangay']);
     
-    // Insert into Person table (certificate subject details)
     $personSql = "INSERT INTO Person 
         (first_name, middle_name, last_name, id_image_path, birth_date, gender, email, contact_number, marital_status, senior_or_pwd, solo_parent, emergency_contact_name, emergency_contact_number, emergency_contact_address, barangay_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -61,7 +53,6 @@ try {
     if (!$stmt) {
         throw new Exception("Prepare failed (Person): " . $conn->error);
     }
-    
     $stmt->bind_param(
         "ssssssssssssssi",
         $firstName,
@@ -80,12 +71,9 @@ try {
         $emergencyAddress,
         $barangay_id
     );
-    
     if (!$stmt->execute()) {
         throw new Exception("Person insert failed: " . $stmt->error);
     }
-    
-    // Get the newly generated person_id for later use in Address and DocumentRequest
     $person_id = $stmt->insert_id;
     $stmt->close();
     
@@ -97,15 +85,14 @@ try {
     if (!$stmt) {
         throw new Exception("Prepare failed (Address): " . $conn->error);
     }
-    
     $residencyType    = $_POST['residencyType'];
     $yearsInSanRafael = intval($_POST['yearsInSanRafael']);
     $blockLot         = $_POST['blockLot'];
     $phase            = $_POST['phase'];
     $street           = $_POST['street'];
     $subdivision      = $_POST['subdivision'];
-    $city             = "San Rafael";
-    $province         = "Bulacan";
+    $city             = $_POST['city'];
+    $province         = $_POST['province'];
     $addressBarangayId = intval($_POST['barangay']);
     
     $stmt->bind_param(
@@ -121,17 +108,13 @@ try {
         $province,
         $addressBarangayId
     );
-    
     if (!$stmt->execute()) {
         throw new Exception("Address insert failed: " . $stmt->error);
     }
     $stmt->close();
     
     /***************** Insert Document Request Details *****************/
-    // Retrieve the requester’s user ID from the session
     $user_id = $_SESSION['user_id'];
-    
-    // Map document type text to document type ID (ensure your DocumentType table contains these values)
     $documentType = $_POST['documentType'];
     $documentTypeMapping = array(
         "barangayClearance"     => 1,
@@ -141,7 +124,6 @@ try {
         "goodMoralCertificate"  => 5,
         "noIncomeCertification" => 6
     );
-    
     if (!isset($documentTypeMapping[$documentType])) {
         throw new Exception("Invalid document type selected.");
     }
@@ -157,7 +139,6 @@ try {
     $indigency_income   = isset($_POST['indigencyIncome']) ? $_POST['indigencyIncome'] : null;
     $indigency_reason   = isset($_POST['indigencyReason']) ? $_POST['indigencyReason'] : null;
     
-    // Updated query includes user_id to link the document request to the requester
     $docReqSql = "INSERT INTO DocumentRequest 
         (person_id, user_id, document_type_id, request_date, status, remarks, clearance_purpose, residency_duration, residency_purpose, gmc_purpose, nic_reason, indigency_income, indigency_reason)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -165,14 +146,8 @@ try {
     if (!$stmt) {
         throw new Exception("Prepare failed (DocumentRequest): " . $conn->error);
     }
-    
-    // Build the bind type string: we need three integers (person_id, user_id, document_type_id),
-    // then 8 strings for request_date, status, remarks, clearance_purpose, residency_duration, residency_purpose, gmc_purpose, nic_reason,
-    // then a double for indigency_income and a string for indigency_reason.
-    // That totals 3 (i) + 8 (s) + 1 (d) + 1 (s) = 13 parameters.
-    // To be safe, we concatenate the type string using str_repeat:
-    $types = "iii" . str_repeat("s", 8) . "ds"; // equals: "iii" + "ssssssss" + "d" + "s"
-    
+    // Build the type string: 3 integers, 8 strings, 1 double, 1 string = "iii" + "ssssssss" + "ds"
+    $types = "iii" . str_repeat("s", 8) . "ds"; 
     $stmt->bind_param(
         $types,
         $person_id,
@@ -189,22 +164,17 @@ try {
         $indigency_income,
         $indigency_reason
     );
-    
     if (!$stmt->execute()) {
         throw new Exception("Document Request insert failed: " . $stmt->error);
     }
     $stmt->close();
     
-    // Commit the transaction if everything is successful
+    // Commit the transaction
     $conn->commit();
     echo "Document Request Submitted Successfully.";
-    
 } catch (Exception $e) {
-    // Roll back the transaction if any error occurs.
     $conn->rollback();
     echo "Submission Failed: " . $e->getMessage();
 }
-
 $conn->close();
 ?>
-d
