@@ -18,7 +18,7 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
 </head>
 <body>
   <!-- Navigation Bar -->
-  <header>
+  <header> 
     <nav class="navbar">
       <a href="#" class="logo">
         <img src="../photo/logo.png" alt="Barangay Hub Logo" />
@@ -33,7 +33,7 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
         <a href="#services">Services</a>
         <a href="#contact">Contact</a>
         <!-- Edit Account Option Added Here -->
-        <a href="../pages/edit_account.php">Edit Account</a>
+        <a href="../pages/edit_account.php">Account</a>
       </div>
     </nav>
   </header>

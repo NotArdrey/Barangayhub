@@ -1,11 +1,8 @@
 <?php
 session_start();
-require "../config/dbconn.php";
-$error = isset($_SESSION['error']) ? $_SESSION['error'] : '';
-unset($_SESSION['error']);
-header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
+$error = isset($_SESSION['login_error']) ? $_SESSION['login_error'] : '';
+unset($_SESSION['login_error']);
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,6 +10,8 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Barangay Hub Login</title>
   <link rel="stylesheet" href="../styles/index.css">
+  <!-- Include SweetAlert2 CSS and JS from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -21,10 +20,6 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
       <img src="../photo/logo.png" alt="Government Logo">
       <h1>Barangay Hub</h1>
     </div>
-
-    <?php if($error !== ''): ?>
-      <p class="error-message"><?php echo $error; ?></p>
-    <?php endif; ?>
 
     <!-- Login Form -->
     <form action="../functions/index.php" method="POST" id="login-form">
@@ -48,11 +43,9 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
         </div>
         <div class="forget-pass">
             <a href="../pages/forget_pass.php" class="alt-link">Forgot password?</a>
-          </div>
+        </div>
       </div>
-      <button type="submit" class="login-btn">
-        <span>Sign In</span>
-      </button>
+      <button type="submit" class="login-btn"><span>Sign In</span></button>
     </form>
 
     <!-- Divider between standard and social login -->
@@ -62,9 +55,7 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
 
     <!-- Social Login Buttons -->
     <div class="social-login">
-      <!-- Keep the Google button as is -->
       <button type="button" class="social-btn google-btn" id="google-signin-button">
-        <!-- Google Icon -->
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 48 48">
           <path fill="#EA4335" d="M24 9.5c3.54 0 6.76 1.22 9.25 3.22l6.87-6.87C35.29 3.12 30.06 1 24 1 14.43 1 6.27 5.73 2.54 12.2l7.75 6.02C12.15 12.35 17.61 9.5 24 9.5z"/>
           <path fill="#4285F4" d="M46.19 24.5c0-1.64-.15-3.21-.43-4.73H24v9h12.53c-.54 2.87-2.15 5.29-4.58 6.93l7.25 5.64c4.26-3.92 6.76-9.68 6.76-16.84z"/>
@@ -79,7 +70,6 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
         <a href="../pages/register.php" class="alt-link">Sign up</a>
       </div>
     </div>
-
 
     <!-- Footer -->
     <div class="footer">
@@ -144,13 +134,17 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
         this.classList.toggle('visible');
       });
     });
+
+    // Display SweetAlert for login errors, if any
+    document.addEventListener('DOMContentLoaded', function() {
+      <?php if(!empty($error)): ?>
+        Swal.fire({
+          icon: 'error',
+          title: 'Login Failed',
+          text: '<?php echo addslashes($error); ?>'
+        });
+      <?php endif; ?>
+    });
   </script>
 </body>
 </html>
-
-<?php
-  if(isset($_SESSION['alert'])) {
-    echo $_SESSION['alert'];
-    unset($_SESSION['alert']);
-  }
-?>

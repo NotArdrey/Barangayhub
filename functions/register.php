@@ -1,80 +1,105 @@
 <?php
 session_start();
-require "../config/dbconn.php"; // This file should define $dsn, $user, $pass
+require_once __DIR__ . '/../vendor/autoload.php';
 
-// Load PHPMailer classes via Composer autoload
+use Dotenv\Dotenv;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
-require '../vendor/autoload.php';
 
-require_once __DIR__ . '/../vendor/autoload.php';
-$dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/../');
+// Load environment variables
+$dotenv = Dotenv::createImmutable(__DIR__ . '/../');
 $dotenv->load();
 
+// Include PDO connection (defined in dbconn.php as $pdo)
+require "../config/dbconn.php";
 
-
+// ------------------------------------------------------
+// Email Verification: Process link click with token
+// ------------------------------------------------------
 if (isset($_GET['token'])) {
-    // ---------------------------
-    // Email Verification Process
-    // ---------------------------
     $token = $_GET['token'];
 
-    try {
-        $pdo = new PDO($dsn, $user, $pass);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    // Prepare statement using PDO to find a user with the provided token,
+    // who is not verified and whose token has not expired.
+    $stmt = $pdo->prepare("SELECT user_id FROM Users WHERE verification_token = :token AND isverify = 'no' AND verification_expiry > NOW()");
+    $stmt->execute([':token' => $token]);
+    $user = $stmt->fetch();
+    
+    if ($user) {
+        $user_id = $user['user_id'];
+        
+        // Update the user record to mark as verified and clear token data.
+        $stmt2 = $pdo->prepare("UPDATE Users SET isverify = 'yes', verification_token = NULL, verification_expiry = NULL WHERE verification_token = :token");
+        if (!$stmt2->execute([':token' => $token])) {
+            $message = "Update failed.";
+            $icon = "error";
+        } else {
+            // Retrieve the user's email address
+            $stmt3 = $pdo->prepare("SELECT email FROM Users WHERE user_id = :user_id");
+            $stmt3->execute([':user_id' => $user_id]);
+            $userEmail = $stmt3->fetchColumn();
 
-        // Check if a user exists with this token, is not yet verified,
-        // and that the verification token has not expired.
-        $stmt = $pdo->prepare("SELECT user_id FROM Users WHERE verification_token = ? AND isverify = 'no' AND verification_expiry > NOW()");
-        $stmt->execute([$token]);
+            // Prepare and send confirmation email to the user using PHPMailer
+            $mail = new PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host       = 'smtp.gmail.com';
+                $mail->SMTPAuth   = true;
+                $mail->Username   = 'barangayhub2@gmail.com';
+                $mail->Password   = 'eisy hpjz rdnt bwrp';
+                $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                $mail->Port       = 587;
 
-        if ($stmt->rowCount() > 0) {
-            // Mark the user as verified and clear the token and expiry fields
-            $stmt = $pdo->prepare("UPDATE Users SET isverify = 'yes', verification_token = NULL, verification_expiry = NULL WHERE verification_token = ?");
-            $stmt->execute([$token]);
+                $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+                $mail->addAddress($userEmail);
+
+                $mail->isHTML(true);
+                $mail->Subject = 'Registration Completed';
+                $mail->Body    = 'Congratulations! Your email has been verified and your account is now active. You have been registered successfully.';
+                $mail->AltBody = 'Congratulations! Your email has been verified and your account is now active.';
+                $mail->send();
+            } catch (Exception $e) {
+                // Log the error if needed, but do not block verification.
+            }
             $message = "Your email has been verified successfully!";
             $icon = "success";
-        } else {
-            $message = "Invalid or expired verification token.";
-            $icon = "error";
         }
-    } catch (PDOException $e) {
-        $message = "Database error: " . $e->getMessage();
+    } else {
+        $message = "Invalid or expired verification token.";
         $icon = "error";
     }
     ?>
     <!DOCTYPE html>
     <html>
     <head>
-      <meta charset="UTF-8">
-      <title>Email Verification</title>
-      <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+        <meta charset="UTF-8">
+        <title>Email Verification</title>
+        <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     </head>
     <body>
-      <script>
-        Swal.fire({
-          icon: <?php echo json_encode($icon); ?>,
-          title: <?php echo json_encode(($icon === "success") ? "Verified" : "Error"); ?>,
-          text: <?php echo json_encode($message); ?>
-        }).then(() => {
-          window.location.href = "../pages/index.php";
-        });
-      </script>
+        <script>
+            Swal.fire({
+                icon: <?php echo json_encode($icon); ?>,
+                title: <?php echo json_encode(($icon === "success") ? "Verified" : "Error"); ?>,
+                text: <?php echo json_encode($message); ?>
+            }).then(() => {
+                window.location.href = "../pages/index.php";
+            });
+        </script>
     </body>
     </html>
     <?php
     exit();
-} elseif ($_SERVER["REQUEST_METHOD"] == "POST") {
-    // ---------------------------
-    // Registration Process
-    // ---------------------------
+}
+
+// ------------------------------------------------------
+// Registration Process: Creating a New User Account
+// ------------------------------------------------------
+elseif ($_SERVER["REQUEST_METHOD"] == "POST") {
     // Retrieve and trim form inputs
     $email = trim($_POST['email']);
     $password = $_POST['password'];
     $confirmPassword = $_POST['confirmPassword'];
-    // Retrieve role_id from the form (hidden input)
-    $role_id = isset($_POST['role_id']) ? trim($_POST['role_id']) : '';
-
     $errors = [];
 
     // Validate email
@@ -91,133 +116,119 @@ if (isset($_GET['token'])) {
         $errors[] = "Password must be at least 8 characters long.";
     }
 
-    // Validate confirm password
+    // Confirm password check
     if (empty($confirmPassword)) {
         $errors[] = "Please confirm your password.";
     } elseif ($password !== $confirmPassword) {
         $errors[] = "Passwords do not match.";
     }
 
-    // Optionally validate role_id if needed, e.g.:
-    if (empty($role_id)) {
-        $errors[] = "Role is not specified.";
-    }
-    
-    // Proceed if no validation errors
+    // Set role_id for residents (every new user gets role_id = 3)
+    $role_id = 3;
+
     if (empty($errors)) {
-        // Hash the password securely
+        // Hash the password
         $passwordHash = password_hash($password, PASSWORD_DEFAULT);
-        
-        // Generate a verification token (32 hexadecimal characters)
+        // Generate a verification token and set expiry to 24 hours
         $verificationToken = bin2hex(random_bytes(16));
-        // Set token expiry to 24 hours from now (adjust as needed)
         $verificationExpiry = date('Y-m-d H:i:s', strtotime('+1 day'));
 
-        try {
-            $pdo = new PDO($dsn, $user, $pass);
-            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        // Check if the email is already registered
+        $stmt = $pdo->prepare("SELECT user_id FROM Users WHERE email = ?");
+        $stmt->execute([$email]);
+        if ($stmt->rowCount() > 0) {
+            $errors[] = "This email is already registered.";
+        }
 
-            // Check if the email is already registered
-            $stmt = $pdo->prepare("SELECT user_id FROM Users WHERE email = ?");
-            $stmt->execute([$email]);
-            if ($stmt->rowCount() > 0) {
-                $errors[] = "This email is already registered.";
-            } else {
-                // Use email as default username (update logic as needed)
-                $username = $email;
-                // Insert the new user record with isverify set to "no" and include role_id
-                $stmt = $pdo->prepare("INSERT INTO Users (username, email, password_hash, role_id, isverify, verification_token, verification_expiry) VALUES (?, ?, ?, ?, 'no', ?, ?)");
-                $stmt->execute([$username, $email, $passwordHash, $role_id, $verificationToken, $verificationExpiry]);
-
-                // Create a verification link (adjust the URL to your domain/path)
-                $verificationLink = "https://localhost/barangayhub/pages/verify.php?token=" . $verificationToken;
-
-                // Send the verification email using PHPMailer
-                $mail = new PHPMailer(true);
-                try {
-                    // SMTP server configuration
-                    $mail->isSMTP();
-                    $mail->Host       = 'smtp.gmail.com';
-                    $mail->SMTPAuth   = true;
-                    $mail->Username   = 'barangayhub2@gmail.com';  // Your SMTP username
-                    $mail->Password   = 'eisy hpjz rdnt bwrp';         // Your SMTP password
-                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-                    $mail->Port       = 587;
-
-                    // Recipients
-                    $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
-                    $mail->addAddress($email);
-
-                    // Email content
-                    $mail->isHTML(true);
-                    $mail->Subject = 'Email Verification';
-                    $mail->Body    = "Thank you for registering. Please verify your email by clicking the following link: <a href='$verificationLink'>$verificationLink</a><br>Your link will expire in 24 hours.";
-
-                    $mail->send();
-                    $message = "Registration successful! Please check your email to verify your account.";
-                    $icon = "success";
-                    $redirectUrl = "../pages/index.php";
-                } catch (Exception $e) {
-                    $errors[] = "Message could not be sent. Mailer Error: " . $mail->ErrorInfo;
-                }
+        if (empty($errors)) {
+            // Insert the new user record including role_id = 3
+            $stmt = $pdo->prepare("INSERT INTO Users (email, password_hash, role_id, isverify, verification_token, verification_expiry) VALUES (?, ?, ?, 'no', ?, ?)");
+            if (!$stmt->execute([$email, $passwordHash, $role_id, $verificationToken, $verificationExpiry])) {
+                $errors[] = "Insert failed.";
             }
-        } catch (PDOException $e) {
-            $errors[] = "Database error: " . $e->getMessage();
+
+            // Create the verification link
+            $verificationLink = "https://localhost/barangayhub/functions/register.php?token=" . $verificationToken;
+
+
+            // Send verification email using PHPMailer
+            $mail = new PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host       = 'smtp.gmail.com';
+                $mail->SMTPAuth   = true;
+                $mail->Username   = 'barangayhub2@gmail.com';
+                $mail->Password   = 'eisy hpjz rdnt bwrp';
+                $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                $mail->Port       = 587;
+
+                $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+                $mail->addAddress($email);
+
+                $mail->isHTML(true);
+                $mail->Subject = 'Email Verification';
+                $mail->Body    = "Thank you for registering. Please verify your email by clicking the following link: <a href='$verificationLink'>$verificationLink</a><br>Your link will expire in 24 hours.";
+                $mail->send();
+
+                $message = "Registration successful! Please check your email to verify your account.";
+                $icon = "success";
+                $redirectUrl = "../pages/index.php";
+            } catch (Exception $e) {
+                $errors[] = "Message could not be sent. Mailer Error: " . $mail->ErrorInfo;
+            }
         }
     }
 
     if (!empty($errors)) {
-        // There were errors during registration
         $errorMessage = implode("\n", $errors);
         ?>
         <!DOCTYPE html>
         <html>
         <head>
-          <meta charset="UTF-8">
-          <title>Registration Error</title>
-          <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+            <meta charset="UTF-8">
+            <title>Registration Error</title>
+            <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
         </head>
         <body>
-          <script>
-            Swal.fire({
-              icon: "error",
-              title: "Error",
-              text: <?php echo json_encode($errorMessage); ?>
-            }).then(() => {
-              window.location.href = "../pages/register.php";
-            });
-          </script>
+            <script>
+                Swal.fire({
+                    icon: "error",
+                    title: "Error",
+                    text: <?php echo json_encode($errorMessage); ?>
+                }).then(() => {
+                    window.location.href = "../pages/register.php";
+                });
+            </script>
         </body>
         </html>
         <?php
         exit();
     } else {
-        // Registration successful and email sent
         ?>
         <!DOCTYPE html>
         <html>
         <head>
-          <meta charset="UTF-8">
-          <title>Registration Success</title>
-          <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+            <meta charset="UTF-8">
+            <title>Registration Success</title>
+            <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
         </head>
         <body>
-          <script>
-            Swal.fire({
-              icon: "success",
-              title: "Success",
-              text: <?php echo json_encode($message); ?>
-            }).then(() => {
-              window.location.href = <?php echo json_encode($redirectUrl); ?>;
-            });
-          </script>
+            <script>
+                Swal.fire({
+                    icon: "success",
+                    title: "Success",
+                    text: <?php echo json_encode($message); ?>,
+                    footer: '<a href="../functions/resend_verification.php?email=<?php echo urlencode($email); ?>">Resend verification email?</a>'
+                }).then(() => {
+                    window.location.href = <?php echo json_encode($redirectUrl); ?>;
+                });
+            </script>
         </body>
         </html>
         <?php
         exit();
     }
 } else {
-    // If no token and not a POST request, redirect to the registration page
     header("Location: ../pages/register.php");
     exit();
 }

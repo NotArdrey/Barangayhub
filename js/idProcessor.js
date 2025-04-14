@@ -45,7 +45,7 @@ function processImage(dataURL) {
         const ocrText = result.data.text;
 
         // Verify if the OCR text appears to be from a PH government ID
-        if (!verifyPHID(ocrText)) {
+        if (!verifyPHID(ocrText)) {chan
           alert("The uploaded ID does not appear to be a valid PH government ID.");
           return;
         }
