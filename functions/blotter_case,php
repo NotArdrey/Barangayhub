@@ -1,0 +1,128 @@
+<?php
+session_start();
+require "../config/dbconn.php";
+
+// Ensure that only a Barangay Admin (role_id=2) can access this file.
+if (!isset($_SESSION['user_id']) || $_SESSION['role_id'] != 2) {
+    header("Location: ../pages/index.php");
+    exit;
+}
+
+// -------------------------
+// (A) Handle Blotter Case Creation
+// -------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['blotter_submit'])) {
+    // Retrieve basic case information.
+    $complaint = isset($_POST['complaint']) ? trim($_POST['complaint']) : "";
+    $location = isset($_POST['location']) ? trim($_POST['location']) : "";
+    
+    // Process supporting file upload, if any.
+    $uploadedFilePath = "";
+    if (isset($_FILES['complaint_file']) && $_FILES['complaint_file']['error'] === UPLOAD_ERR_OK) {
+        $uploadDir = "../uploads/blotter/";
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
+        }
+        $fileName = basename($_FILES['complaint_file']['name']);
+        $targetFile = $uploadDir . time() . "_" . $fileName;
+        if (move_uploaded_file($_FILES['complaint_file']['tmp_name'], $targetFile)) {
+            $uploadedFilePath = $targetFile;
+        }
+    }
+    
+    // Process voice recording upload, if any.
+    $voiceFilePath = "";
+    if (isset($_FILES['voice_recording']) && $_FILES['voice_recording']['error'] === UPLOAD_ERR_OK) {
+        $uploadAudioDir = "../uploads/voice_recordings/";
+        if (!is_dir($uploadAudioDir)) {
+            mkdir($uploadAudioDir, 0755, true);
+        }
+        $audioFileName = basename($_FILES['voice_recording']['name']);
+        $targetAudioFile = $uploadAudioDir . time() . "_" . $audioFileName;
+        if (move_uploaded_file($_FILES['voice_recording']['tmp_name'], $targetAudioFile)) {
+            $voiceFilePath = $targetAudioFile;
+        }
+    }
+    
+    // Compose the complete case description.
+    $description = $complaint;
+    if ($uploadedFilePath != "") {
+        $description .= "\nUploaded File: " . $uploadedFilePath;
+    }
+    if ($voiceFilePath != "") {
+        $description .= "\nVoice Recording: " . $voiceFilePath;
+    }
+    if (isset($_POST['transcription_text']) && !empty(trim($_POST['transcription_text']))) {
+        $description .= "\nVoice Transcription: " . trim($_POST['transcription_text']);
+    }
+    
+    // Insert the new blotter case.
+    $stmt = $pdo->prepare("INSERT INTO BlotterCase (date_reported, location, description, status, barangay_id)
+                           VALUES (NOW(), :location, :description, 'Pending', :barangay_id)");
+    // Using the barangay ID stored in session or retrieved previously.
+    $stmt->execute([
+        ':location'   => $location,
+        ':description'=> $description,
+        ':barangay_id'=> $_SESSION['barangay_id'] // or use $barangay_id if available
+    ]);
+    $blotter_case_id = $pdo->lastInsertId();
+    
+    // Optionally, assign a case category.
+    if (!empty($_POST['case_category'])) {
+        $stmt = $pdo->prepare("INSERT INTO BlotterCaseCategory (blotter_case_id, category_id)
+                               VALUES (:blotter_case_id, :category_id)");
+        $stmt->execute([
+            ':blotter_case_id' => $blotter_case_id,
+            ':category_id'     => $_POST['case_category']
+        ]);
+    }
+    
+    // Optionally, record an intervention if provided.
+    if (!empty($_POST['intervention'])) {
+        $intervention = $_POST['intervention'];
+        $intervention_date = isset($_POST['intervention_date']) ? $_POST['intervention_date'] : null;
+        $intervention_remarks = isset($_POST['intervention_remarks']) ? trim($_POST['intervention_remarks']) : "";
+        $stmt = $pdo->prepare("INSERT INTO BlotterCaseIntervention (blotter_case_id, intervention_id, date_intervened, remarks)
+                               VALUES (:blotter_case_id, :intervention_id, :date_intervened, :remarks)");
+        $stmt->execute([
+            ':blotter_case_id'  => $blotter_case_id,
+            ':intervention_id'  => $intervention,
+            ':date_intervened'  => $intervention_date,
+            ':remarks'          => $intervention_remarks
+        ]);
+    }
+    
+    // Log the action in AuditTrail.
+    $auditStmt = $pdo->prepare("INSERT INTO AuditTrail (admin_user_id, action, table_name, record_id, description)
+                                VALUES (:admin_user_id, 'Add', 'BlotterCase', :record_id, :description)");
+    $auditStmt->execute([
+        ':admin_user_id' => $_SESSION['user_id'],
+        ':record_id'     => $blotter_case_id,
+        ':description'   => "Added new blotter case with ID " . $blotter_case_id
+    ]);
+    
+    header("Location: ../pages/barangay_admin_dashboard.php#blotter");
+    exit;
+}
+
+// -------------------------
+// (B) Handle Blotter Case Deletion
+// -------------------------
+if (isset($_GET['action']) && $_GET['action'] === 'delete_blotter' && isset($_GET['id'])) {
+    $blotterId = $_GET['id'];
+    $stmt = $pdo->prepare("DELETE FROM BlotterCase WHERE blotter_case_id = :blotterId");
+    $stmt->execute([':blotterId' => $blotterId]);
+    
+    // Log the deletion in AuditTrail.
+    $auditStmt = $pdo->prepare("INSERT INTO AuditTrail (admin_user_id, action, table_name, record_id, description)
+                                VALUES (:admin_user_id, 'Delete', 'BlotterCase', :record_id, :description)");
+    $auditStmt->execute([
+        ':admin_user_id' => $_SESSION['user_id'],
+        ':record_id'     => $blotterId,
+        ':description'   => "Deleted blotter case with ID " . $blotterId
+    ]);
+    
+    header("Location: ../pages/barangay_admin_dashboard.php#blotter");
+    exit;
+}
+?>
