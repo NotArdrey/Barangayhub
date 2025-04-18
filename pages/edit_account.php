@@ -30,8 +30,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $gender                    = $_POST['gender'];
     $contact_number            = trim($_POST['contact_number']);
     $marital_status            = $_POST['marital_status'];
-    $senior_or_pwd             = $_POST['senior_or_pwd'];
-    $solo_parent               = $_POST['solo_parent'];
     $emergency_contact_name    = trim($_POST['emergency_contact_name']);
     $emergency_contact_number  = trim($_POST['emergency_contact_number']);
     $emergency_contact_address = trim($_POST['emergency_contact_address']);
@@ -80,8 +78,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             gender = ?, 
                             contact_number = ?, 
                             marital_status = ?, 
-                            senior_or_pwd = ?, 
-                            solo_parent = ?, 
                             emergency_contact_name = ?, 
                             emergency_contact_number = ?, 
                             emergency_contact_address = ?, 
@@ -96,8 +92,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $gender,
             $contact_number,
             $marital_status,
-            $senior_or_pwd,
-            $solo_parent,
             $emergency_contact_name,
             $emergency_contact_number,
             $emergency_contact_address,
@@ -167,7 +161,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <!-- Main Content -->
   <main class="edit-account-section">
 
-    
     <?php if (!empty($error_message)): ?>
       <script>
           Swal.fire({
@@ -242,21 +235,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <option value="Separated" <?php echo (isset($user['marital_status']) && $user['marital_status'] === "Separated") ? 'selected' : ''; ?>>Separated</option>
           </select>
         </div>
-        <div class="form-group">
-          <label for="senior_or_pwd">Senior/PWD Status</label>
-          <select name="senior_or_pwd" id="senior_or_pwd">
-            <option value="None" <?php echo (isset($user['senior_or_pwd']) && $user['senior_or_pwd'] === "None") ? 'selected' : ''; ?>>None</option>
-            <option value="Senior Citizen" <?php echo (isset($user['senior_or_pwd']) && $user['senior_or_pwd'] === "Senior Citizen") ? 'selected' : ''; ?>>Senior Citizen</option>
-            <option value="PWD" <?php echo (isset($user['senior_or_pwd']) && $user['senior_or_pwd'] === "PWD") ? 'selected' : ''; ?>>PWD</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="solo_parent">Solo Parent</label>
-          <select name="solo_parent" id="solo_parent">
-            <option value="No" <?php echo (isset($user['solo_parent']) && $user['solo_parent'] === "No") ? 'selected' : ''; ?>>No</option>
-            <option value="Yes" <?php echo (isset($user['solo_parent']) && $user['solo_parent'] === "Yes") ? 'selected' : ''; ?>>Yes</option>
-          </select>
-        </div>
+        <!-- Removed Senior/PWD and Solo Parent fields -->
         <div class="form-group">
           <label for="emergency_contact_name">Emergency Contact Name</label>
           <input type="text" id="emergency_contact_name" name="emergency_contact_name" value="<?php echo htmlspecialchars($user['emergency_contact_name'] ?? ''); ?>">
@@ -312,3 +291,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   </script>
 </body>
 </html>
+<?php
+// functions.php
+
+/**
+ * Returns the dashboard URL based on the user's role.
+ *
+ * @param int $role_id The user's role ID.
+ * @return string The appropriate dashboard URL.
+ */
+function getDashboardUrl($role_id) {
+    if ($role_id == 1) {
+        return "../pages/super_admin_dashboard.php";
+    } elseif ($role_id == 2) {
+        return "../pages/barangay_admin_dashboard.php";
+    } else {
+        return "../pages/user_dashboard.php";
+    }
+}
+
+/**
+ * Loads the barangay name for a given user based on email.
+ *
+ * @param PDO|mysqli $pdo The database connection object.
+ * @param string $email The user's email.
+ * @return string|null The barangay name if found, or null otherwise.
+ */
+function loadBarangayInfo($pdo, $email) {
+    // Retrieve the barangay_id from the Users table
+    $stmt = $pdo->prepare("SELECT barangay_id FROM Users WHERE email = :email LIMIT 1");
+    $stmt->execute([':email' => $email]);
+    $userRecord = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($userRecord && !empty($userRecord['barangay_id'])) {
+        $stmt2 = $pdo->prepare("SELECT barangay_name FROM Barangay WHERE barangay_id = :barangay_id LIMIT 1");
+        $stmt2->execute([':barangay_id' => $userRecord['barangay_id']]);
+        $barangayRecord = $stmt2->fetch(PDO::FETCH_ASSOC);
+        if ($barangayRecord) {
+            return $barangayRecord['barangay_name'];
+        }
+    }
+    return null;
+}
+?>

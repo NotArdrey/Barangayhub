@@ -93,10 +93,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['email']) && isset($_P
         $stmt->execute([':email' => $email]);
         $dummyUser = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($dummyUser) {
-            $_SESSION['user_id'] = $dummyUser['user_id'];
-            $_SESSION['email']   = $dummyUser['email'];
-            $_SESSION['role_id'] = $dummyUser['role_id'];
-            // Optionally, for Barangay Admin, load barangay info.
+            $_SESSION['user_id']       = $dummyUser['user_id'];
+            $_SESSION['email']         = $dummyUser['email'];
+            $_SESSION['role_id']       = $dummyUser['role_id'];
+            $_SESSION['barangay_id']   = $dummyUser['barangay_id'];
             $_SESSION['barangay_name'] = 'BMA-Balagtas';
             
             // Log this login action using the actual user id.
@@ -119,15 +119,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['email']) && isset($_P
                 exit;
             }
             
-            $_SESSION['user_id'] = $user['user_id'];
-            $_SESSION['email']   = $user['email'];
-            $_SESSION['role_id'] = $user['role_id'];
+            $_SESSION['user_id']     = $user['user_id'];
+            $_SESSION['email']       = $user['email'];
+            $_SESSION['role_id']     = $user['role_id'];
             
-            // If the user is a Barangay Admin, load the barangay info.
             if ($user['role_id'] == 2) {
-                $barangayName = loadBarangayInfo($pdo, $user['email']);
-                if ($barangayName !== null) {
-                    $_SESSION['barangay_name'] = $barangayName;
+                // fetch both name and id
+                $stmt = $pdo->prepare("SELECT barangay_id, barangay_name
+                                         FROM Users u
+                                         JOIN Barangay b ON u.barangay_id = b.barangay_id
+                                        WHERE u.user_id = :uid
+                                        LIMIT 1");
+                $stmt->execute([':uid' => $user['user_id']]);
+                if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $_SESSION['barangay_id']   = $row['barangay_id'];
+                    $_SESSION['barangay_name'] = $row['barangay_name'];
                 }
             }
             
@@ -202,13 +208,21 @@ if (strpos($contentType, "application/json") !== false) {
             $_SESSION['user_id'] = $user['user_id'];
             $_SESSION['email']   = $user['email'];
             $_SESSION['role_id'] = $user['role_id'];
-
+            
             if ($user['role_id'] == 2) {
-                $barangayName = loadBarangayInfo($pdo, $user['email']);
-                if ($barangayName !== null) {
-                    $_SESSION['barangay_name'] = $barangayName;
+                $stmt = $pdo->prepare("
+                  SELECT u.barangay_id, b.barangay_name
+                    FROM Users u
+                    JOIN Barangay b ON u.barangay_id = b.barangay_id
+                   WHERE u.user_id = :uid
+                   LIMIT 1
+                ");
+                $stmt->execute([':uid'=>$user['user_id']]);
+                if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                  $_SESSION['barangay_id']   = $row['barangay_id'];
+                  $_SESSION['barangay_name'] = $row['barangay_name'];
                 }
-            }
+              }
             
             // Log Google OAuth login.
             logAuditTrail($pdo, $user['user_id'], "LOGIN", "Users", $user['user_id'], "User logged in via Google OAuth.");

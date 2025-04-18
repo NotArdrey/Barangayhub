@@ -180,6 +180,41 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
       </div>
     </section>
 
+
+    <section class="announcements-section" id="announcements">
+      <div class="section-header">
+        <h2>Announcements</h2>
+        <p>Latest updates and events in your barangay</p>
+      </div>
+      <div class="announcements-container">
+        <?php if ($events_result->num_rows > 0): ?>
+          <?php while($event = $events_result->fetch_assoc()): ?>
+            <div class="announcement-card">
+              <h3><?php echo htmlspecialchars($event['title']); ?></h3>
+              <div class="event-date">
+                <i class="fas fa-calendar-alt"></i>
+                <?php 
+                  $start = new DateTime($event['start_datetime']);
+                  $end = new DateTime($event['end_datetime']);
+                  echo $start->format('M j, Y g:i A') . ' - ' . $end->format('g:i A');
+                ?>
+              </div>
+              <div class="event-location">
+                <i class="fas fa-map-marker-alt"></i>
+                <?php echo htmlspecialchars($event['location']); ?>
+              </div>
+              <p><?php echo htmlspecialchars($event['description']); ?></p>
+              <div class="event-organizer">
+                Organized by: <?php echo htmlspecialchars($event['organizer']); ?>
+              </div>
+            </div>
+          <?php endwhile; ?>
+        <?php else: ?>
+          <p class="no-announcements">No current announcements.</p>
+        <?php endif; ?>
+      </div>
+    </section>
+
     <!-- Contact Section -->
     <section class="contact-section" id="contact" data-aos="fade-up">
       <div class="section-header">

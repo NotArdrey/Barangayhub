@@ -1,6 +1,6 @@
 <?php
 session_start();
-require "../config/dbconn.php"; 
+require "../config/dbconn.php"; // This file initializes the $pdo PDO connection
 
 // Ensure user is logged in
 if (!isset($_SESSION['user_id'])) {
@@ -8,114 +8,36 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-// Process file upload for government ID image
-$idImagePath = "";
-if (isset($_FILES['uploadId']) && $_FILES['uploadId']['error'] == UPLOAD_ERR_OK) {
-    $uploadDir = "uploads/";
-    if (!is_dir($uploadDir)) {
-        mkdir($uploadDir, 0777, true);
-    }
-    $fileName = uniqid() . '_' . basename($_FILES['uploadId']['name']);
-    $targetFilePath = $uploadDir . $fileName;
-    if (move_uploaded_file($_FILES['uploadId']['tmp_name'], $targetFilePath)) {
-        $idImagePath = $targetFilePath;
-    } else {
-        die("Error: Failed to move uploaded file.");
-    }
-} else {
-    die("Error: File upload error (" . ($_FILES['uploadId']['error'] ?? 'No file uploaded') . ").");
-}
+// Include PHPMailer library files (adjust the paths as needed)
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
 
-// Begin transaction to ensure all inserts succeed or none do
-$conn->begin_transaction();
+require '../PHPMailer/src/Exception.php';
+require '../PHPMailer/src/PHPMailer.php';
+require '../PHPMailer/src/SMTP.php';
+
+// You may have user email stored in the session or you might need to query it from the database.
+// For this example, we'll assume it is stored in the session.
+$userEmail = isset($_SESSION['user_email']) ? $_SESSION['user_email'] : '';
+$userName  = isset($_SESSION['user_name']) ? $_SESSION['user_name'] : 'User';
 
 try {
-    /***************** Insert Certificate Subject into Person Table *****************/
-    $firstName    = trim($_POST['firstName']);
-    $middleName   = trim($_POST['middleName']);
-    $lastName     = trim($_POST['lastName']);
-    $birthDate    = $_POST['birthday'];
-    $gender       = $_POST['gender'];
-    $email        = $_POST['email'];
-    $contactNumber= $_POST['contactNumber'];
-    $maritalStatus= $_POST['maritalStatus'];
-    $seniorOrPwd  = isset($_POST['seniorOrPwd']) ? $_POST['seniorOrPwd'] : "None";
-    $soloParent   = isset($_POST['soloParent']) ? $_POST['soloParent'] : "No";
-    $emergencyName= $_POST['emergencyName'];
-    $emergencyNumber = $_POST['emergencyNumber'];
-    $emergencyAddress= $_POST['emergencyAddress'];
-    $barangay_id  = intval($_POST['barangay']);
-    
-    $personSql = "INSERT INTO Person 
-        (first_name, middle_name, last_name, id_image_path, birth_date, gender, email, contact_number, marital_status, senior_or_pwd, solo_parent, emergency_contact_name, emergency_contact_number, emergency_contact_address, barangay_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    $stmt = $conn->prepare($personSql);
-    if (!$stmt) {
-        throw new Exception("Prepare failed (Person): " . $conn->error);
-    }
-    $stmt->bind_param(
-        "ssssssssssssssi",
-        $firstName,
-        $middleName,
-        $lastName,
-        $idImagePath,
-        $birthDate,
-        $gender,
-        $email,
-        $contactNumber,
-        $maritalStatus,
-        $seniorOrPwd,
-        $soloParent,
-        $emergencyName,
-        $emergencyNumber,
-        $emergencyAddress,
-        $barangay_id
-    );
-    if (!$stmt->execute()) {
-        throw new Exception("Person insert failed: " . $stmt->error);
-    }
-    $person_id = $stmt->insert_id;
-    $stmt->close();
-    
-    /***************** Insert Address Details *****************/
-    $addressSql = "INSERT INTO Address 
-        (person_id, residency_type, years_in_san_rafael, block_lot, phase, street, subdivision, city, province, barangay_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    $stmt = $conn->prepare($addressSql);
-    if (!$stmt) {
-        throw new Exception("Prepare failed (Address): " . $conn->error);
-    }
-    $residencyType    = $_POST['residencyType'];
-    $yearsInSanRafael = intval($_POST['yearsInSanRafael']);
-    $blockLot         = $_POST['blockLot'];
-    $phase            = $_POST['phase'];
-    $street           = $_POST['street'];
-    $subdivision      = $_POST['subdivision'];
-    $city             = $_POST['city'];
-    $province         = $_POST['province'];
-    $addressBarangayId = intval($_POST['barangay']);
-    
-    $stmt->bind_param(
-        "isissssssi",
-        $person_id,
-        $residencyType,
-        $yearsInSanRafael,
-        $blockLot,
-        $phase,
-        $street,
-        $subdivision,
-        $city,
-        $province,
-        $addressBarangayId
-    );
-    if (!$stmt->execute()) {
-        throw new Exception("Address insert failed: " . $stmt->error);
-    }
-    $stmt->close();
-    
+    // Begin transaction to ensure atomicity
+    $pdo->beginTransaction();
+    $userId = $_SESSION['user_id'];
+
+    // Assuming $idImagePath is defined somewhere before updating the user's record.
+    // For example, it could be a file upload result from another part of your code.
+    // $idImagePath = ... (your code to determine the path)
+
+    // Update the user's record with the new ID image path
+    $updateUserSql = "UPDATE Users SET id_image_path = ? WHERE user_id = ?";
+    $stmt = $pdo->prepare($updateUserSql);
+    $stmt->execute([$idImagePath, $userId]);
+
     /***************** Insert Document Request Details *****************/
-    $user_id = $_SESSION['user_id'];
-    $documentType = $_POST['documentType'];
+    // Retrieve and validate document type from POST data
+    $documentType = trim($_POST['documentType']);
     $documentTypeMapping = array(
         "barangayClearance"     => 1,
         "firstTimeJobSeeker"    => 2,
@@ -128,30 +50,27 @@ try {
         throw new Exception("Invalid document type selected.");
     }
     $document_type_id = $documentTypeMapping[$documentType];
-    $request_date     = date("Y-m-d H:i:s");
-    $status           = "Pending";
-    $remarks          = "";
-    $clearance_purpose  = isset($_POST['purposeClearance']) ? $_POST['purposeClearance'] : null;
-    $residency_duration = isset($_POST['residencyDuration']) ? $_POST['residencyDuration'] : null;
-    $residency_purpose  = isset($_POST['residencyPurpose']) ? $_POST['residencyPurpose'] : null;
-    $gmc_purpose        = isset($_POST['gmcPurpose']) ? $_POST['gmcPurpose'] : null;
-    $nic_reason         = isset($_POST['nicReason']) ? $_POST['nicReason'] : null;
-    $indigency_income   = isset($_POST['indigencyIncome']) ? $_POST['indigencyIncome'] : null;
-    $indigency_reason   = isset($_POST['indigencyReason']) ? $_POST['indigencyReason'] : null;
-    
+
+    $request_date = date("Y-m-d H:i:s");
+    $status = "Pending";
+    $remarks = "";
+
+    // Optional document-specific fields
+    $clearance_purpose  = isset($_POST['purposeClearance']) ? trim($_POST['purposeClearance']) : null;
+    $residency_duration = isset($_POST['residencyDuration']) ? trim($_POST['residencyDuration']) : null;
+    $residency_purpose  = isset($_POST['residencyPurpose']) ? trim($_POST['residencyPurpose']) : null;
+    $gmc_purpose        = isset($_POST['gmcPurpose']) ? trim($_POST['gmcPurpose']) : null;
+    $nic_reason         = isset($_POST['nicReason']) ? trim($_POST['nicReason']) : null;
+    $indigency_income   = (isset($_POST['indigencyIncome']) && $_POST['indigencyIncome'] !== '') ? trim($_POST['indigencyIncome']) : null;
+    $indigency_reason   = isset($_POST['indigencyReason']) ? trim($_POST['indigencyReason']) : null;
+    $deliveryMethod     = trim($_POST['deliveryMethod']);
+
     $docReqSql = "INSERT INTO DocumentRequest 
-        (person_id, user_id, document_type_id, request_date, status, remarks, clearance_purpose, residency_duration, residency_purpose, gmc_purpose, nic_reason, indigency_income, indigency_reason)
+        (user_id, document_type_id, request_date, status, remarks, clearance_purpose, residency_duration, residency_purpose, gmc_purpose, nic_reason, indigency_income, indigency_reason, delivery_method)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    $stmt = $conn->prepare($docReqSql);
-    if (!$stmt) {
-        throw new Exception("Prepare failed (DocumentRequest): " . $conn->error);
-    }
-    // Build the type string: 3 integers, 8 strings, 1 double, 1 string = "iii" + "ssssssss" + "ds"
-    $types = "iii" . str_repeat("s", 8) . "ds"; 
-    $stmt->bind_param(
-        $types,
-        $person_id,
-        $user_id,
+    $stmt = $pdo->prepare($docReqSql);
+    $stmt->execute([
+        $userId,
         $document_type_id,
         $request_date,
         $status,
@@ -162,19 +81,49 @@ try {
         $gmc_purpose,
         $nic_reason,
         $indigency_income,
-        $indigency_reason
-    );
-    if (!$stmt->execute()) {
-        throw new Exception("Document Request insert failed: " . $stmt->error);
+        $indigency_reason,
+        $deliveryMethod
+    ]);
+    $docRequestId = $pdo->lastInsertId();
+
+    // Log the document request insertion in the AuditTrail
+    $auditSql = "INSERT INTO AuditTrail (admin_user_id, action, table_name, record_id, description) VALUES (?, 'INSERT', 'DocumentRequest', ?, ?)";
+    $stmt = $pdo->prepare($auditSql);
+    $stmt->execute([$userId, $docRequestId, "New document request submitted along with an updated ID image."]);
+
+    // Commit the transaction after all queries are successful
+    $pdo->commit();
+
+    // Send confirmation email using PHPMailer
+    $mail = new PHPMailer(true);
+    try {
+        // Server settings
+        $mail->isSMTP();
+        $mail->Host       = 'smtp.example.com';             // Replace with your SMTP server
+        $mail->SMTPAuth   = true;
+        $mail->Username   = 'barangayhub2@gmail.com';         // Replace with your SMTP username
+        $mail->Password   = 'eisy hpjz rdnt bwrp';                  // Replace with your SMTP password
+        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;    // Enable TLS encryption; you can also use ENCRYPTION_SMTPS
+        $mail->Port       = 587;                              // TCP port to connect to
+
+        // Recipients
+        $mail->setFrom('your_email@example.com', 'Your App Name');
+        $mail->addAddress($userEmail, $userName); // Add recipient. Adjust how you obtain the user's email.
+
+        // Content
+        $mail->isHTML(false);  // Set email format to plain text if desired, or use isHTML(true) for HTML content
+        $mail->Subject = 'Document Request Confirmation';
+        $mail->Body    = "Hello {$userName},\n\nYour document request (Request ID: {$docRequestId}) has been submitted successfully. We will notify you once the request is processed.\n\nThank you,\nYour App Name";
+
+        $mail->send();
+    } catch (Exception $mailException) {
+        // Log the email sending error but continue (email failure should not rollback the main transaction)
+        error_log("Confirmation email could not be sent. Mailer Error: {$mail->ErrorInfo}");
     }
-    $stmt->close();
-    
-    // Commit the transaction
-    $conn->commit();
+
     echo "Document Request Submitted Successfully.";
 } catch (Exception $e) {
-    $conn->rollback();
+    $pdo->rollBack();
     echo "Submission Failed: " . $e->getMessage();
 }
-$conn->close();
 ?>
