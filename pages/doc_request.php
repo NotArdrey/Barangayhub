@@ -3,11 +3,12 @@ session_start();
 // doc_request.php
 require "../vendor/autoload.php";
 require "../config/dbconn.php";
+use Dompdf\Dompdf;
 use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception; // If you want to catch PHPMailer exceptions
+use PHPMailer\PHPMailer\Exception; 
 
 
-
+//..pages/doc_request.php
 
 // 3) Make sure the user is actually logged in
 if (!isset($_SESSION['user_id']) || $_SESSION['role_id'] < 2) {
@@ -58,29 +59,31 @@ if (isset($_GET['action'])) {
         // ---------------------------------------
         if ($action === 'view_doc_request') {
             $stmt = $pdo->prepare("
-                SELECT 
-                    dr.document_request_id,
-                    dr.request_date,
-                    dr.status,
-                    dr.delivery_method,
-                    dr.remarks AS request_remarks,
-                    dt.document_name,
-                    -- Fetch all relevant user details
-                    u.user_id,
-                    u.email,
-                    u.contact_number,
-                    u.birth_date,
-                    u.gender,
-                    u.marital_status,
-                    u.emergency_contact_name,
-                    u.emergency_contact_number,
-                    u.emergency_contact_address,
-                    u.id_image_path,
-                    CONCAT(u.first_name, ' ', COALESCE(u.middle_name, ''), ' ', u.last_name) AS full_name
-                FROM DocumentRequest dr
-                JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-                JOIN Users u ON dr.user_id = u.user_id
-                WHERE dr.document_request_id = :id
+              SELECT
+                  dr.document_request_id,
+                  dr.request_date,
+                  dr.status,
+                  dr.delivery_method,
+                  dr.remarks AS request_remarks,
+                  dt.document_name,
+                  u.user_id, u.email, u.contact_number, u.birth_date,
+                  u.gender, u.marital_status,
+                  u.emergency_contact_name, u.emergency_contact_number,
+                  u.emergency_contact_address, u.id_image_path,
+                  CONCAT(u.first_name,' ',COALESCE(u.middle_name,''),' ',u.last_name) AS full_name,
+                  MAX(CASE WHEN a.attr_key='clearance_purpose'  THEN a.attr_value END) AS clearance_purpose,
+                  MAX(CASE WHEN a.attr_key='residency_duration' THEN a.attr_value END) AS residency_duration,
+                  MAX(CASE WHEN a.attr_key='residency_purpose'  THEN a.attr_value END) AS residency_purpose,
+                  MAX(CASE WHEN a.attr_key='gmc_purpose'        THEN a.attr_value END) AS gmc_purpose,
+                  MAX(CASE WHEN a.attr_key='nic_reason'         THEN a.attr_value END) AS nic_reason,
+                  MAX(CASE WHEN a.attr_key='indigency_income'   THEN a.attr_value END) AS indigency_income,
+                  MAX(CASE WHEN a.attr_key='indigency_reason'   THEN a.attr_value END) AS indigency_reason
+              FROM DocumentRequest dr
+              JOIN DocumentType  dt ON dr.document_type_id = dt.document_type_id
+              JOIN Users         u  ON dr.user_id          = u.user_id
+              LEFT JOIN DocumentRequestAttribute a ON a.request_id = dr.document_request_id
+              WHERE dr.document_request_id = :id
+              GROUP BY dr.document_request_id
             ");
             $stmt->execute([':id' => $reqId]);
             $result = $stmt->fetch();
@@ -100,74 +103,84 @@ if (isset($_GET['action'])) {
         // ------------------------------------------------
         } elseif ($action === 'send_email') {
 
-            // 1) Fetch requester's info
-            $stmt = $pdo->prepare("
-                SELECT 
-                    dr.document_request_id,
-                    dt.document_name,
-                    u.email,
-                    CONCAT(u.first_name, ' ', u.last_name) AS requester_name
-                FROM DocumentRequest dr
-                JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-                JOIN Users u ON dr.user_id = u.user_id
-                WHERE dr.document_request_id = :id
-            ");
-            $stmt->execute([':id' => $reqId]);
-            $result = $stmt->fetch();
+          // 1) Fetch requester's info
+          $stmt = $pdo->prepare("
+              SELECT 
+                  dr.document_request_id,
+                  dt.document_name,
+                  u.email,
+                  CONCAT(u.first_name, ' ', u.last_name) AS requester_name
+              FROM DocumentRequest dr
+              JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+              JOIN Users u ON dr.user_id = u.user_id
+              WHERE dr.document_request_id = :id
+          ");
+          $stmt->execute([':id' => $reqId]);
+          $result = $stmt->fetch();
+      
+          if ($result && !empty($result['email'])) {
+              require_once '../vendor/autoload.php';
 
-            if ($result && !empty($result['email'])) {
-
-                // 2) Send Email using PHPMailer
-                $mail = new PHPMailer(true);
-                try {
-                    // (Optional) $mail->SMTPDebug = 2;
-                    $mail->isSMTP();
-                    $mail->Host       = 'smtp.gmail.com';
-                    $mail->SMTPAuth   = true;
-                    // Adjust credentials accordingly:
-                    $mail->Username   = 'barangayhub2@gmail.com';
-                    $mail->Password   = 'eisy hpjz rdnt bwrp';
-                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-                    $mail->Port       = 587;
-
-                    $mail->setFrom('no-reply@yourdomain.com', 'Barangay Hub');
-                    $mail->addAddress($result['email'], $result['requester_name']);
-
-                    $mail->Subject = 'Your Document Request: ' . $result['document_name'];
-                    $mail->Body    = "Hello {$result['requester_name']},\n\nYour request for '{$result['document_name']}' has been processed and is attached (if applicable). Thank you!";
-
-                    if ($mail->send()) {
-                        // 3) Upon successful email, automatically mark as complete
-                        $updateStmt = $pdo->prepare("
-                            UPDATE DocumentRequest 
-                            SET status = 'Complete' 
-                            WHERE document_request_id = :id
-                        ");
-                        $updateStmt->execute([':id' => $reqId]);
-
-                        // Log to audit trail
-                        logAuditTrail(
-                            $pdo, 
-                            $current_admin_id, 
-                            'UPDATE', 
-                            'DocumentRequest', 
-                            $reqId, 
-                            'Sent document via email and marked as complete.'
-                        );
-
-                        $response['success'] = true;
-                        $response['message'] = 'Email sent and request marked as complete.';
-                    } else {
-                        $response['message'] = 'Unable to send email (no exception).';
-                    }
-                } catch (Exception $e) {
-                    $response['message'] = 'Mailer Error: ' . $mail->ErrorInfo;
-                }
-
-            } else {
-                $response['message'] = 'Request or email information not found.';
-            }
-
+      
+              // Generate the template HTML
+              ob_start();
+              include "../functions/document_template.php?id=$reqId";
+              $html = ob_get_clean();
+      
+              // Generate PDF from HTML
+              $dompdf = new Dompdf();
+              $dompdf->loadHtml($html);
+              $dompdf->setPaper('A4', 'portrait');
+              $dompdf->render();
+              $pdfOutput = $dompdf->output();
+              $pdfFileName = 'document_request_' . $reqId . '.pdf';
+      
+              // Send Email using PHPMailer
+              $mail = new PHPMailer(true);
+              try {
+                  $mail->isSMTP();
+                  $mail->Host       = 'smtp.gmail.com';
+                  $mail->SMTPAuth   = true;
+                  $mail->Username   = 'barangayhub2@gmail.com';
+                  $mail->Password   = 'eisy hpjz rdnt bwrp';
+                  $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                  $mail->Port       = 587;
+      
+                  $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+                  $mail->addAddress($result['email'], $result['requester_name']);
+      
+                  $mail->Subject = 'Your Document Request: ' . $result['document_name'];
+                  $mail->Body    = "Hello {$result['requester_name']},\n\nYour request for '{$result['document_name']}' has been processed. Please find the attached document.\n\nThank you!";
+                  $mail->addStringAttachment($pdfOutput, $pdfFileName, 'base64', 'application/pdf');
+      
+                  if ($mail->send()) {
+                      $updateStmt = $pdo->prepare("
+                          UPDATE DocumentRequest 
+                          SET status = 'Complete' 
+                          WHERE document_request_id = :id
+                      ");
+                      $updateStmt->execute([':id' => $reqId]);
+      
+                      logAuditTrail(
+                          $pdo, 
+                          $current_admin_id, 
+                          'UPDATE', 
+                          'DocumentRequest', 
+                          $reqId, 
+                          'Sent document via email (with PDF) and marked as complete.'
+                      );
+      
+                      $response['success'] = true;
+                      $response['message'] = 'Email sent successfully with PDF and marked as complete.';
+                  } else {
+                      $response['message'] = 'Unable to send email.';
+                  }
+              } catch (Exception $e) {
+                  $response['message'] = 'Mailer Error: ' . $mail->ErrorInfo;
+              }
+          } else {
+              $response['message'] = 'Request or email information not found.';
+          }
         // -------------------------------------
         // (C) MARK DOCUMENT REQUEST AS COMPLETE
         // -------------------------------------
@@ -237,7 +250,7 @@ if (isset($_GET['action'])) {
                     $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
                     $mail->Port       = 587;
 
-                    $mail->setFrom('no-reply@yourdomain.com', 'Barangay Hub');
+                    $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
                     $mail->addAddress($requestInfo['email'], $requestInfo['requester_name']);
 
                     $mail->Subject = 'Document Request Not Processed';
@@ -408,14 +421,14 @@ $completedRequests = $stmtHist->fetchAll();
                     Send Email
                   </button>
                   <?php else: ?>
-                  <button class="printDocRequestBtn bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700" data-id="<?= $req['document_request_id'] ?>">
+                  <button class="printDocRequestBtn p-2 text-blue-600 hover:text-blue-900 rounded-lg hover:bg-blue-50" data-id="<?= $req['document_request_id'] ?>">
                     Print
                   </button>
-                  <button class="completeDocRequestBtn bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700" data-id="<?= $req['document_request_id'] ?>">
+                  <button class="completeDocRequestBtn p-2 text-blue-600 hover:text-blue-900 rounded-lg hover:bg-blue-50" data-id="<?= $req['document_request_id'] ?>">
                     Complete
                   </button>
                   <?php endif; ?>
-                  <button class="deleteDocRequestBtn bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700" data-id="<?= $req['document_request_id'] ?>">
+                  <button class="deleteDocRequestBtn p-2 text-blue-600 hover:text-blue-900 rounded-lg hover:bg-blue-50" data-id="<?= $req['document_request_id'] ?>">
                     Delete
                   </button>
                 </div>
@@ -603,7 +616,7 @@ $completedRequests = $stmtHist->fetchAll();
         btn.addEventListener('click', function() {
           let requestId = this.getAttribute('data-id');
           // If you have a specific print page or method, adapt here:
-          window.open(`doc_request.php?action=print_document_request&id=${requestId}`, '_blank');
+            window.open(`../functions/document_template.php?id=${requestId}`, '_blank');
         });
       });
 
@@ -618,6 +631,8 @@ $completedRequests = $stmtHist->fetchAll();
             icon: 'question',
             showCancelButton: true,
             confirmButtonText: 'Yes, send it',
+            confirmButtonColor: '#d33',
+            cancelButtonColor: '#3085d6',
             cancelButtonText: 'Cancel'
           }).then((result) => {
             if (result.isConfirmed) {
@@ -649,6 +664,8 @@ $completedRequests = $stmtHist->fetchAll();
             text: 'This will mark the request as ready for pickup.',
             icon: 'question',
             showCancelButton: true,
+            confirmButtonColor: '#d33',
+            cancelButtonColor: '#3085d6',
             confirmButtonText: 'Yes, complete it',
             cancelButtonText: 'Cancel'
           }).then((result) => {
@@ -683,6 +700,8 @@ $completedRequests = $stmtHist->fetchAll();
             input: 'textarea',
             inputPlaceholder: 'Enter your remarks here...',
             showCancelButton: true,
+            confirmButtonColor: '#d33',
+            cancelButtonColor: '#3085d6',
             confirmButtonText: 'Delete',
             cancelButtonText: 'Cancel',
             preConfirm: (remarks) => {

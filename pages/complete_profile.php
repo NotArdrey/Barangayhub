@@ -6,13 +6,19 @@ require "../config/dbconn.php"; // Assumes this file creates a PDO instance as $
  * Returns the appropriate dashboard URL based on the user's role.
  */
 function getDashboardUrl($role_id) {
-    if ($role_id == 1) {
-        return "../pages/super_admin_dashboard.php";
-    } elseif ($role_id == 2) {
-        return "../pages/barangay_admin_dashboard.php";
-    } else {
-        return "../pages/user_dashboard.php";
-    }
+  if ($role_id == 1) {
+      return "../pages/programmer_admin.php"; 
+  } elseif ($role_id == 2) {
+      return "../pages/super_admin_dashboard.php";
+  } elseif ($role_id == 3) {
+      return "../pages/barangay_admin_dashboard.php";
+  } elseif ($role_id == 4) {
+      return "../pages/barangay_admin_dashboard.php";
+  } elseif ($role_id == 5) {
+      return "../pages/barangay_admin_dashboard.php";
+  } else {
+      return "../pages/user_dashboard.php";
+  }
 }
 
 // Only allow logged-in users; if not, redirect to login page.

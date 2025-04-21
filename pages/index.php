@@ -2,6 +2,8 @@
 session_start();
 $error = isset($_SESSION['login_error']) ? $_SESSION['login_error'] : '';
 unset($_SESSION['login_error']);
+
+
 ?>
 <!DOCTYPE html>
 <html lang="en">

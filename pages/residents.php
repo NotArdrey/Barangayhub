@@ -164,8 +164,12 @@ require_once "../pages/header.php";
                                             data-res='<?= htmlspecialchars(json_encode($r), ENT_QUOTES, 'UTF-8') ?>'>
                                         Edit
                                     </button>
-                                    <?php if($role === 1): ?>
-                                        <button class="deleteBtn bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700" 
+                                    <?php if ($role === 1): // Super Admin only ?>
+                                        <button class="deactivateBtn bg-yellow-500 text-white px-2 py-1 rounded hover:bg-yellow-600"
+                                                data-id="<?= $r['user_id'] ?>">
+                                            <?= $r['is_active'] === 'yes' ? 'Deactivate' : 'Activate' ?>
+                                        </button>
+                                        <button class="deleteBtn bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
                                                 data-id="<?= $r['user_id'] ?>">
                                             Delete
                                         </button>
@@ -330,7 +334,37 @@ require_once "../pages/header.php";
                     row.style.display = row.textContent.toLowerCase().includes(term) ? '' : 'none';
                 });
             });
-
+            document.querySelectorAll('.deactivateBtn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const userId = btn.dataset.id;
+                    const action  = btn.textContent.trim().toLowerCase(); // 'deactivate' or 'activate'
+                    Swal.fire({
+                    title: `${action.charAt(0).toUpperCase() + action.slice(1)} Resident?`,
+                    text: `This will ${action} resident ID ${userId}.`,
+                    icon: 'warning',
+                    confirmButtonColor: '#d33',
+                    cancelButtonColor: '#3085d6',
+                    showCancelButton: true,
+                    confirmButtonText: action.charAt(0).toUpperCase() + action.slice(1),
+                    cancelButtonText: 'Cancel'
+                    }).then(result => {
+                    if (!result.isConfirmed) return;
+                    fetch(`resident_status.php?id=${userId}&action=${action}`, {
+                        method: 'PATCH'
+                    })
+                    .then(res => {
+                        if (!res.ok) throw new Error('Request failed');
+                        return res.json();
+                    })
+                    .then(data => {
+                        if (data.success) {
+                        Swal.fire('Done!', data.message, 'success').then(() => location.reload());
+                        }
+                    })
+                    .catch(err => Swal.fire('Error', err.message, 'error'));
+                    });
+                });
+                });
             // Delete handling
             document.querySelectorAll('.deleteBtn').forEach(btn => {
                 btn.addEventListener('click', function() {
@@ -340,6 +374,10 @@ require_once "../pages/header.php";
                         text: `Confirm deletion of resident ID ${userId}`,
                         icon: 'warning',
                         showCancelButton: true,
+                        confirmButtonColor: '#d33',
+                        cancelButtonColor: '#3085d6',
+
+
                         confirmButtonText: 'Delete',
                         cancelButtonText: 'Cancel'
                     }).then((result) => {

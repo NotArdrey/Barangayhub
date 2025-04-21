@@ -11,60 +11,170 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role_id'] < 2) {
     exit;
 }
 $bid = $_SESSION['barangay_id'];
+function logAuditTrail(PDO $pdo, int $adminId, string $action, string $table, int $recordId, string $desc = '') {
+    $pdo->prepare("
+        INSERT INTO AuditTrail
+          (admin_user_id, action, table_name, record_id, description)
+        VALUES (?, ?, ?, ?, ?)
+    ")->execute([
+        $adminId,
+        $action,
+        $table,
+        $recordId,
+        $desc
+    ]);
+}
 
+function sendEventEmails(PDO $pdo, array $event, int $barangayId, string $type) {
+    // Fetch all users in the barangay
+    $stmt = $pdo->prepare("SELECT email FROM Users WHERE barangay_id = ?");
+    $stmt->execute([$barangayId]);
+    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($users)) return;
+
+    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+    try {
+        // SMTP Configuration (Replace with your settings)
+        $mail->isSMTP();
+        $mail->Host       = 'smtp.example.com';    // SMTP server
+        $mail->SMTPAuth   = true;
+        $mail->Username   = 'barangayhub2@gmail.com'; // SMTP username
+        $mail->Password   = 'eisy hpjz rdnt bwrp';       // SMTP password
+        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port       = 587;
+
+        $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+        $mail->isHTML(false);
+
+        foreach ($users as $user) {
+            $mail->clearAddresses();
+            $mail->addAddress($user['email']);
+
+            $subject = ($type === 'new') ? "New Event: {$event['title']}" : "Event Postponed: {$event['title']}";
+            $mail->Subject = $subject;
+
+            $message = "Dear Resident,\n\n";
+            $message .= ($type === 'new') ? "A new event has been scheduled:\n\n" : "The following event has been postponed:\n\n";
+            $message .= "Title: {$event['title']}\n";
+            $message .= "Description: {$event['description']}\n";
+            $message .= "Start: " . date('M d, Y h:i A', strtotime($event['start_datetime'])) . "\n";
+            $message .= "End: " . date('M d, Y h:i A', strtotime($event['end_datetime'])) . "\n";
+            $message .= "Location: {$event['location']}\n";
+            if (!empty($event['organizer'])) $message .= "Organizer: {$event['organizer']}\n";
+            $message .= "\nThank you,\nBarangay Management";
+
+            $mail->Body = $message;
+            $mail->send();
+        }
+    } catch (Exception $e) {
+        error_log("Mail Error: " . $e->getMessage());
+    }
+}
 // ── 3) Handle form submissions ────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Common sanitization
-    $title            = trim($_POST['title']            ?? '');
-    $start_datetime   = trim($_POST['start_datetime']   ?? '');
-    $end_datetime     = trim($_POST['end_datetime']     ?? '');
-    $location         = trim($_POST['location']         ?? '');
-    $organizer        = trim($_POST['organizer']        ?? '');
-    $description      = trim($_POST['description']      ?? '');
-    $event_id         = intval($_POST['event_id']       ?? 0);
+    // Sanitize and validate input
+    $title = filter_input(INPUT_POST, 'title', FILTER_SANITIZE_STRING);
+    $description = filter_input(INPUT_POST, 'description', FILTER_SANITIZE_STRING);
+    $start_datetime = filter_input(INPUT_POST, 'start_datetime', FILTER_SANITIZE_STRING);
+    $end_datetime = filter_input(INPUT_POST, 'end_datetime', FILTER_SANITIZE_STRING);
+    $location = filter_input(INPUT_POST, 'location', FILTER_SANITIZE_STRING);
+    $organizer = filter_input(INPUT_POST, 'organizer', FILTER_SANITIZE_STRING);
+    $event_id = filter_input(INPUT_POST, 'event_id', FILTER_VALIDATE_INT) ?: 0;
 
-    if (isset($_POST['delete']) && $event_id) {
-        // Delete
-        $stmt = $pdo->prepare(
-            "DELETE FROM Events WHERE event_id = ? AND barangay_id = ?"
-        );
-        $stmt->execute([$event_id, $bid]);
-        $_SESSION['message'] = "Event deleted successfully.";
+    // Common data for both insert/update
+    $barangay_id = $_SESSION['barangay_id'];
+    $created_by = $_SESSION['user_id'];
 
-    } else {
-        // Validate required fields
-        if ($title === '' || $start_datetime === '' || $end_datetime === '' || $location === '') {
-            $_SESSION['message'] = "Title, start, end, and location are required.";
+    try {
+        if (isset($_POST['delete']) && $event_id) {
+            // Handle event postponement
+            $stmt = $pdo->prepare(
+                "UPDATE events 
+                 SET status = 'postponed'
+                 WHERE event_id = ? AND barangay_id = ?"
+            );
+            $stmt->execute([$event_id, $barangay_id]);
+            
+            // Get updated event data
+            $stmt = $pdo->prepare("SELECT * FROM events WHERE event_id = ?");
+            $stmt->execute([$event_id]);
+            $event = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // Send notifications
+            if ($event) {
+                sendEventEmails($pdo, $event, $barangay_id, 'postponed');
+                logAuditTrail($pdo, $_SESSION['user_id'], 'UPDATE', 'Events', $event_id, "Event postponed");
+            }
+            
+            $_SESSION['message'] = "Event postponed successfully. Residents have been notified.";
         } else {
-            // Validate chronological order
+            // Validate required fields
+            $errors = [];
+            if (empty($title)) $errors[] = 'Title is required';
+            if (empty($start_datetime)) $errors[] = 'Start date/time is required';
+            if (empty($end_datetime)) $errors[] = 'End date/time is required';
+            if (empty($location)) $errors[] = 'Location is required';
+            
+            // Validate datetime logic
             if (strtotime($end_datetime) < strtotime($start_datetime)) {
-                $_SESSION['message'] = "End must be the same as or after the start.";
+                $errors[] = 'End time must be after start time';
+            }
+
+            if (!empty($errors)) {
+                $_SESSION['message'] = implode('<br>', $errors);
             } else {
                 if ($event_id) {
-                    // Update
+                    // Update existing event
                     $stmt = $pdo->prepare(
-                        "UPDATE Events SET title = ?, start_datetime = ?, end_datetime = ?, location = ?, organizer = ?, description = ? WHERE event_id = ? AND barangay_id = ?"
+                        "UPDATE Events SET
+                            title = ?, description = ?, start_datetime = ?,
+                            end_datetime = ?, location = ?, organizer = ?
+                         WHERE event_id = ? AND barangay_id = ?"
                     );
                     $stmt->execute([
-                        $title, $start_datetime, $end_datetime, $location, $organizer, $description,
-                        $event_id, $bid
+                        $title, $description, $start_datetime,
+                        $end_datetime, $location, $organizer,
+                        $event_id, $barangay_id
                     ]);
+                    logAuditTrail($pdo, $_SESSION['user_id'], 'UPDATE', 'Events', $event_id, "Event updated");
                     $_SESSION['message'] = "Event updated successfully.";
                 } else {
-                    // Insert
+                    // Create new event
                     $stmt = $pdo->prepare(
-                        "INSERT INTO Events (title, description, start_datetime, end_datetime, location, organizer, barangay_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                        "INSERT INTO Events (
+                            title, description, start_datetime, end_datetime,
+                            location, organizer, barangay_id, created_by
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                     );
                     $stmt->execute([
-                        $title, $description, $start_datetime, $end_datetime, $location, $organizer, $bid
+                        $title, $description, $start_datetime,
+                        $end_datetime, $location, $organizer,
+                        $barangay_id, $created_by
                     ]);
-                    $_SESSION['message'] = "Event created successfully.";
+                    $newId = $pdo->lastInsertId();
+                    
+                    // Get new event data
+                    $stmt = $pdo->prepare("SELECT * FROM events WHERE event_id = ?");
+                    $stmt->execute([$newId]);
+                    $event = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    // Send notifications
+                    if ($event) {
+                        sendEventEmails($pdo, $event, $barangay_id, 'new');
+                        logAuditTrail($pdo, $_SESSION['user_id'], 'INSERT', 'Events', $newId, "Event created");
+                    }
+                    
+                    $_SESSION['message'] = "Event created successfully. Residents have been notified.";
                 }
             }
         }
+    } catch (PDOException $e) {
+        error_log("Database Error: " . $e->getMessage());
+        $_SESSION['message'] = "An error occurred while processing your request.";
     }
 
-    // Redirect to avoid resubmission
+    // Redirect to prevent resubmission
     header("Location: " . $_SERVER['PHP_SELF']);
     exit;
 }
@@ -144,15 +254,17 @@ $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                 <td class="px-4 py-3 text-sm text-gray-600"><?= htmlspecialchars($event['location']) ?></td>
                                 <td class="px-4 py-3 text-sm text-gray-600"><?= htmlspecialchars($event['organizer'] ?? 'N/A') ?></td>
                                 <td class="px-4 py-3 text-sm text-gray-600">
-                                    <div class="flex items-center justify-end space-x-3">
-                                        <button onclick="editEvent(<?= $event['event_id'] ?>)" class="p-2 text-blue-600 hover:text-blue-900 rounded-lg hover:bg-blue-50">
-                                            <!-- edit icon -->
+                                    <div class="flex items-center space-x-3"> <!-- Removed justify-end -->
+                                        <button onclick="editEvent(<?= $event['event_id'] ?>)" 
+                                                class="p-2 text-blue-600 hover:text-blue-900 rounded-lg hover:bg-blue-50">
+                                            Edit
                                         </button>
                                         <form method="POST" class="inline">
                                             <input type="hidden" name="event_id" value="<?= $event['event_id'] ?>">
                                             <input type="hidden" name="delete" value="1">
-                                            <button type="button" onclick="confirmDelete(this.form)" class="p-2 text-red-600 hover:text-red-900 rounded-lg hover:bg-red-50">
-                                                <!-- delete icon -->
+                                            <button type="button" onclick="confirmDelete(this.form)" 
+                                                    class="p-2 text-red-600 hover:text-red-900 rounded-lg hover:bg-red-50">
+                                                Delete
                                             </button>
                                         </form>
                                     </div>
@@ -175,7 +287,7 @@ $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="relative bg-white rounded-lg shadow">
                     <div class="flex items-start justify-between p-5 border-b rounded-t">
                         <h3 class="text-xl font-semibold text-gray-900" id="modalTitle">New Event</h3>
-                        <button onclick="toggleModal()" class="text-gray-400 hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm w-8 h-8 ml-auto inline-flex justify-center items-center">×</button>
+                        <button onclick="toggleModal()" class="text-gray-400 hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm w-8 h-8 ml-auto inline-flex justify-center items-center">X</button>
                     </div>
                     <form method="POST" class="p-6 space-y-4">
                         <input type="hidden" name="event_id" id="eventId">
@@ -245,13 +357,14 @@ $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         function confirmDelete(form) {
             Swal.fire({
-                title: 'Delete Event?',
-                text: "You won't be able to revert this!",
+                title: 'Postpone Event?',
+                text: "This will notify residents about the postponement!",
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#d33',
                 cancelButtonColor: '#3085d6',
-                confirmButtonText: 'Yes, delete it!'
+                confirmButtonText: 'Yes, Postpone',
+                cancelButtonText: 'Cancel'
             }).then((result) => {
                 if (result.isConfirmed) form.submit();
             });

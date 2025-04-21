@@ -1,20 +1,63 @@
 <?php
 session_start();
-require "../config/dbconn.php"; // This file initializes the $pdo PDO connection
+require "../config/dbconn.php";
+require_once __DIR__ . '/../vendor/autoload.php'; // This file initializes the $pdo PDO connection
 
+
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
 // Ensure user is logged in
 if (!isset($_SESSION['user_id'])) {
     header("Location: ../pages/index.php");
     exit;
 }
 
-// Include PHPMailer library files (adjust the paths as needed)
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception;
+$allowedExtensions = ['jpg', 'jpeg', 'png', 'pdf'];
+$maxFileSize = 2 * 1024 * 1024; // 2MB
 
-require '../PHPMailer/src/Exception.php';
-require '../PHPMailer/src/PHPMailer.php';
-require '../PHPMailer/src/SMTP.php';
+if ($_FILES['uploadId']['error'] !== UPLOAD_ERR_OK) {
+    throw new Exception("ID upload failed: " . $_FILES['uploadId']['error']);
+}
+
+$fileExtension = strtolower(pathinfo($_FILES['uploadId']['name'], PATHINFO_EXTENSION));
+if (!in_array($fileExtension, $allowedExtensions)) {
+    throw new Exception("Invalid file format. Only JPG, PNG, PDF allowed.");
+}
+
+if ($_FILES['uploadId']['size'] > $maxFileSize) {
+    throw new Exception("File too large. Max 2MB allowed.");
+}
+
+// Generate unique filename
+$idImageName = "id_{$userId}_" . time() . ".{$fileExtension}";
+$idImagePath = __DIR__ . "/../uploads/{$idImageName}";
+
+// Move the file
+if (!move_uploaded_file($_FILES['uploadId']['tmp_name'], $idImagePath)) {
+    throw new Exception("Failed to save ID file");
+}
+
+// Store relative path in DB
+$idImagePath = "uploads/{$idImageName}";
+
+
+if (!isset($_FILES['uploadId']) || $_FILES['uploadId']['error'] !== UPLOAD_ERR_OK) {
+    throw new Exception("ID file upload failed");
+}
+
+$uploadDir = __DIR__ . '/../uploads/'; // Create this directory
+if (!is_dir($uploadDir)) {
+    mkdir($uploadDir, 0755, true);
+}
+
+$fileExtension = pathinfo($_FILES['uploadId']['name'], PATHINFO_EXTENSION);
+$idImageName = "user_{$userId}_id." . $fileExtension;
+$idImagePath = $uploadDir . $idImageName;
+
+// Move uploaded file
+if (!move_uploaded_file($_FILES['uploadId']['tmp_name'], $idImagePath)) {
+    throw new Exception("Failed to save ID file");
+}
 
 // You may have user email stored in the session or you might need to query it from the database.
 // For this example, we'll assume it is stored in the session.
@@ -65,25 +108,38 @@ try {
     $indigency_reason   = isset($_POST['indigencyReason']) ? trim($_POST['indigencyReason']) : null;
     $deliveryMethod     = trim($_POST['deliveryMethod']);
 
-    $docReqSql = "INSERT INTO DocumentRequest 
-        (user_id, document_type_id, request_date, status, remarks, clearance_purpose, residency_duration, residency_purpose, gmc_purpose, nic_reason, indigency_income, indigency_reason, delivery_method)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    $stmt = $pdo->prepare($docReqSql);
-    $stmt->execute([
-        $userId,
-        $document_type_id,
-        $request_date,
-        $status,
-        $remarks,
-        $clearance_purpose,
-        $residency_duration,
-        $residency_purpose,
-        $gmc_purpose,
-        $nic_reason,
-        $indigency_income,
-        $indigency_reason,
-        $deliveryMethod
-    ]);
+            $docReqSql = "INSERT INTO DocumentRequest 
+            (user_id, document_type_id, request_date, status, remarks, delivery_method)
+            VALUES (?, ?, ?, ?, ?, ?)";
+        $stmt = $pdo->prepare($docReqSql);
+        $stmt->execute([
+            $userId,
+            $document_type_id,
+            $request_date,
+            $status,
+            $remarks,
+            $deliveryMethod
+        ]);
+        $docRequestId = $pdo->lastInsertId();
+
+        // Insert document-specific attributes into DocRequestAttribute
+        $attributes = [
+            'clearance_purpose'  => $clearance_purpose,
+            'residency_duration' => $residency_duration,
+            'residency_purpose'  => $residency_purpose,
+            'gmc_purpose'        => $gmc_purpose,
+            'nic_reason'         => $nic_reason,
+            'indigency_income'   => $indigency_income,
+            'indigency_reason'   => $indigency_reason
+        ];
+
+        foreach ($attributes as $key => $value) {
+            if ($value !== null) {
+                $attrSql = "INSERT INTO DocumentRequestAttribute (request_id, attr_key, attr_value) VALUES (?, ?, ?)";
+                $stmt = $pdo->prepare($attrSql);
+                $stmt->execute([$docRequestId, $key, $value]);
+            }
+        }
     $docRequestId = $pdo->lastInsertId();
 
     // Log the document request insertion in the AuditTrail

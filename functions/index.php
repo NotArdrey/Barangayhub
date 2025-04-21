@@ -1,7 +1,7 @@
 <?php
 header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
 session_start();
-
+//index.php
 // Include the PDO connection from dbconn.php
 require "../config/dbconn.php";
 
@@ -25,11 +25,17 @@ function logAuditTrail($pdo, $user_id, $action, $table_name = null, $record_id =
  */
 function getDashboardUrl($role_id) {
     if ($role_id == 1) {
-        return "../pages/super_admin_dashboard.php";
+        return "../pages/programmer_admin.php"; 
     } elseif ($role_id == 2) {
+        return "../pages/super_admin.php";
+    } elseif ($role_id == 3) {
+        return "../pages/barangay_admin_dashboard.php";
+    } elseif ($role_id == 4) {
+        return "../pages/barangay_admin_dashboard.php";
+    } elseif ($role_id == 5) {
         return "../pages/barangay_admin_dashboard.php";
     } else {
-        return "../pages/user_dashboard.php";
+        return "../pages/complete_profile.php";
     }
 }
 
@@ -123,11 +129,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['email']) && isset($_P
             $_SESSION['email']       = $user['email'];
             $_SESSION['role_id']     = $user['role_id'];
             
-            if ($user['role_id'] == 2) {
-                // fetch both name and id
+            if (in_array($user['role_id'], [3, 4, 5])) {
                 $stmt = $pdo->prepare("SELECT barangay_id, barangay_name
-                                         FROM Users u
-                                         JOIN Barangay b ON u.barangay_id = b.barangay_id
+                                        FROM Users u
+                                        JOIN Barangay b ON u.barangay_id = b.barangay_id
                                         WHERE u.user_id = :uid
                                         LIMIT 1");
                 $stmt->execute([':uid' => $user['user_id']]);
