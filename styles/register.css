@@ -20,8 +20,13 @@ body {
   display: grid;
   place-items: center;
   padding: 1rem;
+<<<<<<< HEAD
   position: relative; /* Needed for the pseudo-element positioning */
   /* You can still keep your gradient on the body if needed */
+=======
+  position: relative;
+
+>>>>>>> v5
   background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
 }
 
@@ -54,6 +59,10 @@ body::before {
   padding: 2rem;
   text-align: center;
   color: white;
+<<<<<<< HEAD
+=======
+  margin-bottom: 1.5rem;
+>>>>>>> v5
 }
 
 .header img {
@@ -236,6 +245,63 @@ input:focus {
   text-align: center;
   margin-bottom: 1rem;
 }
+<<<<<<< HEAD
+=======
+
+.announcements-section {
+  padding: 4rem 2rem;
+  background-color: #f9fafb;
+}
+
+.announcements-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.announcement-card {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  transition: transform 0.3s ease;
+}
+
+.announcement-card:hover {
+  transform: translateY(-5px);
+}
+
+.announcement-card h3 {
+  color: #3b82f6;
+  margin-bottom: 0.5rem;
+}
+
+.event-date, .event-location {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #666;
+  margin-bottom: 0.5rem;
+}
+
+.event-date i, .event-location i {
+  color: #3b82f6;
+}
+
+.event-organizer {
+  margin-top: 1rem;
+  font-style: italic;
+  color: #666;
+}
+
+.no-announcements {
+  text-align: center;
+  color: #666;
+  grid-column: 1 / -1;
+}
+>>>>>>> v5
 /* Responsive Design */
 @media (max-width: 480px) {
   .register-container {

@@ -1,5 +1,3 @@
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9,21 +7,18 @@
   <link rel="stylesheet" href="../styles/register.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
 </head>
-
 <body>
   <div class="register-container">
     <div class="header">
       <img src="../photo/logo.png" alt="Government Logo">
       <h1>Create Account</h1>
     </div>
-
-    <form action="../function/register.php" method="POST">
+    <form action="../functions/register.php" method="POST">
       <div class="input-group">
         <input type="hidden" name="role_id" value="3">
-        <label for="email" class = "email">Email</label>
+        <label for="email">Email</label>
         <input type="text" id="email" name="email" required>
       </div>
-      
       <div class="input-group">
         <label for="password">Password</label>
         <div class="password-container">
@@ -39,7 +34,6 @@
           </button>
         </div>
       </div>
-      
       <div class="input-group">
         <label for="confirmPassword">Confirm Password</label>
         <div class="password-container">
@@ -55,16 +49,11 @@
           </button>
         </div>
       </div>
-      
-      <button type="submit" class="register-btn">
-        <span>Register</span>
-      </button>
+      <button type="submit" class="register-btn"><span>Register</span></button>
     </form>
-
     <div class="footer-links">
         <a href="../pages/index.php" class="help-link">Back to Login</a>
     </div>
-
     <div class="footer">
       <div class="footer-info">
         <p>&copy; 2025 Barangay Hub. All Rights Reserved.</p>
@@ -77,9 +66,8 @@
       </div>
     </div>
   </div>
-
   <script>
-    // Toggle password visibility for both password fields
+    // Toggle password visibility for both password fields.
     const toggleButtons = document.querySelectorAll('.toggle-password');
     toggleButtons.forEach(function(toggle) {
       toggle.addEventListener('click', function() {
@@ -92,10 +80,9 @@
   </script>
 </body>
 </html>
-
 <?php
-            if(isset($_SESSION['alert'])) {
-            echo $_SESSION['alert'];
-            unset($_SESSION['alert']);
-            }
+if(isset($_SESSION['alert'])) {
+    echo $_SESSION['alert'];
+    unset($_SESSION['alert']);
+}
 ?>

@@ -2,6 +2,34 @@
 session_start();
 require "../config/dbconn.php";
 header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
+
+$events_result = [];
+
+if (isset($_SESSION['user_id'])) {
+    $user_id = $_SESSION['user_id'];
+    
+    // Fetch user's barangay_id using PDO
+    $sql = "SELECT barangay_id FROM Users WHERE user_id = ?";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$user_id]);
+    $user = $stmt->fetch();
+
+    if ($user && isset($user['barangay_id'])) {
+        $barangay_id = $user['barangay_id'];
+        $currentDateTime = date('Y-m-d H:i:s');
+
+        // Fetch events using PDO
+        $events_sql = "SELECT * FROM events 
+            WHERE barangay_id = ? 
+            AND (status = 'scheduled' OR status = 'postponed')
+            ORDER BY 
+              CASE WHEN status = 'postponed' THEN 1 ELSE 0 END,
+              start_datetime ASC";
+        $stmt = $pdo->prepare($events_sql);
+        $stmt->execute([$barangay_id, $currentDateTime]);
+        $events_result = $stmt->fetchAll();
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -18,7 +46,7 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
 </head>
 <body>
   <!-- Navigation Bar -->
-  <header>
+  <header> 
     <nav class="navbar">
       <a href="#" class="logo">
         <img src="../photo/logo.png" alt="Barangay Hub Logo" />
@@ -33,7 +61,7 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
         <a href="#services">Services</a>
         <a href="#contact">Contact</a>
         <!-- Edit Account Option Added Here -->
-        <a href="../pages/edit_account.php">Edit Account</a>
+        <a href="../pages/edit_account.php">Account</a>
       </div>
     </nav>
   </header>
@@ -179,6 +207,240 @@ header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
         </div>
       </div>
     </section>
+
+    <style>
+.announcements-section {
+    padding: 4rem 1.5rem;
+    background: #f8f9fa;
+}
+
+.section-header {
+    text-align: center;
+    margin-bottom: 3rem;
+}
+
+.section-header h2 {
+    font-size: 2.5rem;
+    color: #2c3e50;
+    margin-bottom: 1rem;
+    position: relative;
+}
+
+.section-header h2::after {
+    content: '';
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 3px;
+    background: #3498db;
+    border-radius: 2px;
+}
+
+.announcements-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2rem;
+    padding: 0 1rem;
+}
+
+.announcement-card {
+    background: white;
+    border-radius: 15px;
+    overflow: hidden;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    position: relative;
+    border: 1px solid rgba(0,0,0,0.05);
+}
+
+.announcement-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.08);
+}
+
+.announcement-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #3498db 0%, #2ecc71 100%);
+}
+
+.announcement-card h3 {
+    font-size: 1.3rem;
+    color: #2c3e50;
+    margin: 1.5rem 1.5rem 1rem;
+}
+
+.event-details {
+    padding: 0 1.5rem 1.5rem;
+}
+
+.event-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin-bottom: 1rem;
+}
+
+.meta-item {
+    display: flex;
+    align-items: center;
+    color: #7f8c8d;
+    font-size: 0.95rem;
+}
+
+.meta-item i {
+    width: 24px;
+    text-align: center;
+    margin-right: 10px;
+    color: #3498db;
+}
+
+.event-date {
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.event-location {
+    font-size: 0.9rem;
+}
+
+.event-description {
+    color: #34495e;
+    line-height: 1.6;
+    margin-bottom: 1.5rem;
+    font-size: 0.95rem;
+}
+
+.event-organizer {
+    font-size: 0.85rem;
+    color: #7f8c8d;
+    border-top: 1px solid #eee;
+    padding-top: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.no-announcements {
+    text-align: center;
+    color: #7f8c8d;
+    font-size: 1.1rem;
+    grid-column: 1 / -1;
+    padding: 3rem 0;
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+    .announcements-container {
+        grid-template-columns: 1fr;
+        max-width: 600px;
+    }
+    
+    .announcement-card {
+        margin-bottom: 1rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .section-header h2 {
+        font-size: 2rem;
+    }
+    
+    .announcement-card h3 {
+        font-size: 1.2rem;
+    }
+}
+.postponed {
+  position: relative;
+  opacity: 0.8;
+  background: #fff9e6;
+}
+
+.postponed-banner {
+  background: #ffeb3b;
+  color: #856404;
+  padding: 8px 15px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.postponed::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 10px,
+    rgba(0,0,0,0.05) 10px,
+    rgba(0,0,0,0.05) 20px
+  );
+}
+</style>
+
+<section class="announcements-section" id="announcements">
+  <div class="section-header">
+    <h2>Announcements</h2>
+    <p>Stay updated with the latest news and events</p>
+  </div>
+  <div class="announcements-container">
+  <?php if (count($events_result) > 0): ?>
+    <?php foreach ($events_result as $event): ?>
+      <div class="announcement-card <?= $event['status'] === 'postponed' ? 'postponed' : '' ?>">
+        <?php if ($event['status'] === 'postponed'): ?>
+          <div class="postponed-banner">
+            <i class="fas fa-exclamation-triangle"></i>
+            Event Postponed - New Date TBA
+          </div>
+        <?php endif; ?>
+        <div class="announcement-card">
+          <h3><?php echo htmlspecialchars($event['title']); ?></h3>
+          <div class="event-details">
+            <div class="event-meta">
+              <div class="meta-item">
+                <i class="fas fa-calendar-alt"></i>
+                <div class="event-date">
+                  <?php 
+                    $start = new DateTime($event['start_datetime']);
+                    $end = new DateTime($event['end_datetime']);
+                    echo $start->format('M j, Y g:i A') . ' - ' . $end->format('g:i A');
+                  ?>
+                </div>
+              </div>
+              <div class="meta-item">
+                <i class="fas fa-map-marker-alt"></i>
+                <div class="event-location">
+                  <?php echo htmlspecialchars($event['location']); ?>
+                </div>
+              </div>
+            </div>
+            <p class="event-description">
+              <?php echo htmlspecialchars($event['description']); ?>
+            </p>
+            <div class="event-organizer">
+              <i class="fas fa-user-tie"></i>
+              Organized by: <?php echo htmlspecialchars($event['organizer']); ?>
+            </div>
+          </div>
+        </div>
+      <?php endforeach; ?>
+    <?php else: ?>
+      <p class="no-announcements">No upcoming events at the moment. Check back later!</p>
+    <?php endif; ?>
+  </div>
+</section>
 
     <!-- Contact Section -->
     <section class="contact-section" id="contact" data-aos="fade-up">

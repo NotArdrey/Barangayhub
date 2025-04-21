@@ -1,167 +1,87 @@
 <?php
-// reset_password.php
-
 session_start();
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
 
-// Import PHPMailer classes into the global namespace.
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception;
-
-// Load Composer's autoloader.
-require '../vendor/autoload.php';
-require_once __DIR__ . '/../vendor/autoload.php';
-$dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/../');
-$dotenv->load();
-
- 
-
-
+require "../config/dbconn.php";
 
 /**
- * Simulate token validation.
- * Replace this with your actual database verification.
+ * Audit Trail logging function.
  */
-function validateToken($email, $token) {
-    // For demonstration, assume the token is valid if both fields are not empty.
-    return !empty($email) && !empty($token);
+function logAuditTrail($pdo, $user_id, $action, $table_name = null, $record_id = null, $description = '') {
+    $stmt = $pdo->prepare("INSERT INTO AuditTrail (admin_user_id, action, table_name, record_id, description) VALUES (?, ?, ?, ?, ?)");
+    $stmt->execute([$user_id, $action, $table_name, $record_id, $description]);
 }
 
-$error = "";
-$success = "";
-
-// Check if the incoming request is POST.
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
-    // If the request contains the "resend" field, process as a resend email request.
-    if (isset($_POST['resend'])) {
-        $email = $_POST['email'] ?? '';
-
-        // Validate the email address.
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $error = "Invalid email address.";
-        } else {
-            // Generate a new secure token.
-            $token = bin2hex(random_bytes(16));
-            
-            // Save the new token and timestamp to the database here.
-            // For demonstration, we simulate the process.
-
-            // Construct the password reset link.
-            $resetLink = "https://localhost/barangayhub/pages/reset_password.php?email=" 
-                         . urlencode($email) . "&token=" . $token;
-            
-            // Prepare and send the email.
-            $mail = new PHPMailer(true);
-            try {
-                // SMTP server configuration.
-                $mail->isSMTP();
-                $mail->Host       = 'smtp.gmail.com';
-                $mail->SMTPAuth   = true;
-                $mail->Username   = 'SMTP_EMAIL';
-                $mail->Password   = 'SMTP_PASSWORD';
-                $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-                $mail->Port       = 587;
-                
-                // Set sender and recipient.
-                $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
-                $mail->addAddress($email);
-                
-                // Email content.
-                $mail->isHTML(false);
-                $mail->Subject = "Password Reset Request";
-                $mail->Body    = "Dear User,\n\nWe received a request to reset your password. "
-                               . "Please click the link below to reset your password:\n\n"
-                               . $resetLink . "\n\n"
-                               . "If you did not request a password reset, please ignore this email.";
-                
-                // Attempt to send the email.
-                $mail->send();
-                $success = "A new password reset email has been sent to your email.";
-            } catch (Exception $e) {
-                $error = "Failed to send the password reset email. Please try again later. Mailer Error: {$mail->ErrorInfo}";
-            }
-        }
-        // Display SweetAlert and then redirect back to the reset page.
-        ?>
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Password Reset Resend</title>
-            <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-        </head>
-        <body>
-            <script>
-                Swal.fire({
-                    icon: <?php echo json_encode(empty($error) ? "success" : "error"); ?>,
-                    title: <?php echo json_encode(empty($error) ? "Success" : "Error"); ?>,
-                    text: <?php echo json_encode(empty($error) ? $success : $error); ?>
-                }).then(() => {
-                    // Redirect back to the reset page (or another appropriate page).
-                    window.location.href = 'reset_password.php?email=' + <?php echo json_encode($email); ?>;
-                });
-            </script>
-        </body>
-        </html>
-        <?php
-        exit;
-    }
-    // Otherwise, process the password update submission.
-    else {
-        $email           = $_POST['email'] ?? '';
-        $token           = $_POST['token'] ?? '';
-        $newPassword     = $_POST['new_password'] ?? '';
-        $confirmPassword = $_POST['confirm_password'] ?? '';
-    
-        if ($newPassword !== $confirmPassword) {
-            $error = "Passwords do not match.";
-        } elseif (!validateToken($email, $token)) {
-            $error = "Invalid or expired token.";
-        } else {
-            // Hash the new password.
-            $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
-    
-            // Update the password in your database here.
-            // Example: UPDATE users SET password='$hashedPassword' WHERE email='$email' AND token='$token'
-            // For demonstration, we'll assume the update is successful.
-            $success = "Your password has been changed successfully.";
-        }
-        ?>
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <title>Password Reset</title>
-          <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-        </head>
-        <body>
-          <script>
-            <?php if (!empty($error)) { ?>
-              Swal.fire({
-                icon: 'error',
-                title: 'Error',
-                text: <?php echo json_encode($error); ?>
-              }).then(() => {
-                window.history.back();
-              });
-            <?php } else { ?>
-              Swal.fire({
-                icon: 'success',
-                title: 'Success',
-                text: <?php echo json_encode($success); ?>
-              }).then(() => {
-                window.location.href = 'login.php';
-              });
-            <?php } ?>
-          </script>
-        </body>
-        </html>
-        <?php
-        exit();
-    }
-} else {
-    // For GET requests, retrieve the email and token from the URL parameters.
-    $email = $_GET['email'] ?? '';
-    $token = $_GET['token'] ?? '';
+// Ensure this script is only accessed via POST.
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header("Location: ../pages/change_pass.php");
+    exit;
 }
+
+// If the user clicks "Resend Reset Email"
+if (isset($_POST['resend']) && $_POST['resend'] == 1) {
+    $email = isset($_POST['email']) ? $_POST['email'] : '';
+    
+    // Ensure you have the sendPasswordReset() function defined/required before using it.
+    $message = sendPasswordReset($email, $pdo);  
+    $_SESSION['success'] = $message;
+    header("Location: ../pages/change_pass.php?email=" . urlencode($email));
+    exit;
+}
+
+// Process Change Password request.
+$email            = isset($_POST['email']) ? $_POST['email'] : '';
+$token            = isset($_POST['token']) ? $_POST['token'] : '';
+$new_password     = isset($_POST['new_password']) ? $_POST['new_password'] : '';
+$confirm_password = isset($_POST['confirm_password']) ? $_POST['confirm_password'] : '';
+
+// Basic validations.
+if (empty($email) || empty($token)) {
+    $_SESSION['error'] = "Invalid request. Missing email or token.";
+    header("Location: ../pages/change_pass.php");
+    exit;
+}
+
+if (empty($new_password) || empty($confirm_password)) {
+    $_SESSION['error'] = "Please fill in all fields.";
+    header("Location: ../pages/change_pass.php?email=" . urlencode($email) . "&token=" . urlencode($token));
+    exit;
+}
+
+if ($new_password !== $confirm_password) {
+    $_SESSION['error'] = "Passwords do not match.";
+    header("Location: ../pages/change_pass.php?email=" . urlencode($email) . "&token=" . urlencode($token));
+    exit;
+}
+
+// --- Token Verification ---
+$stmt = $pdo->prepare("SELECT user_id, verification_token, verification_expiry FROM Users WHERE email = ?");
+$stmt->execute([$email]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$user) {
+    $_SESSION['error'] = "No account found for that email.";
+    header("Location: ../pages/change_pass.php");
+    exit;
+}
+
+// Check if the token matches and that it hasn't expired.
+if ($token !== $user['verification_token'] || strtotime($user['verification_expiry']) < time()) {
+    $_SESSION['error'] = "Invalid or expired token.";
+    header("Location: ../pages/change_pass.php?email=" . urlencode($email));
+    exit;
+}
+
+// --- Update the Password ---
+$password_hash = password_hash($new_password, PASSWORD_DEFAULT);
+$stmt = $pdo->prepare("UPDATE Users SET password_hash = ?, verification_token = NULL, verification_expiry = NULL WHERE email = ?");
+$stmt->execute([$password_hash, $email]);
+
+// Log the password change event.
+logAuditTrail($pdo, $user['user_id'], "CHANGE PASSWORD", "Users", $user['user_id'], "User changed password successfully.");
+
+$_SESSION['success'] = "Password successfully changed. You may now log in.";
+header("Location: ../pages/index.php");
+exit;
 ?>
