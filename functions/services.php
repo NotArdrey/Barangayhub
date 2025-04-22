@@ -20,7 +20,7 @@ if (!isset($_SESSION['user_id'])) {
     echo json_encode(['success' => false, 'error' => 'Unauthorized access']);
     exit;
 }
-define('PAYMONGO_SECRET_KEY', 'sk_test_2byzkVErtpKCpLK9hkFT37gn');
+define('PAYMONGO_SECRET_KEY', '');
 function getDocumentFee(int $docTypeId): int {
     return [
         1 => 50, 2 => 30, 3 => 30,
