@@ -9,28 +9,25 @@ if (!isset($_GET['id'])) {
 
 $docRequestId = (int)$_GET['id'];
 
+// Main document query
 $sql = "
     SELECT
         dr.request_date,
-        dr.status,
-        dr.remarks,
-        dr.delivery_method,
-        MAX(CASE WHEN a.attr_key = 'clearance_purpose'  THEN a.attr_value END) AS clearance_purpose,
-        MAX(CASE WHEN a.attr_key = 'residency_duration' THEN a.attr_value END) AS residency_duration,
-        MAX(CASE WHEN a.attr_key = 'residency_purpose'  THEN a.attr_value END) AS residency_purpose,
-        MAX(CASE WHEN a.attr_key = 'gmc_purpose'        THEN a.attr_value END) AS gmc_purpose,
-        MAX(CASE WHEN a.attr_key = 'nic_reason'         THEN a.attr_value END) AS nic_reason,
-        MAX(CASE WHEN a.attr_key = 'indigency_income'   THEN a.attr_value END) AS indigency_income,
-        MAX(CASE WHEN a.attr_key = 'indigency_reason'   THEN a.attr_value END) AS indigency_reason,
+        dr.barangay_id,
         dt.document_name,
-        dt.document_description,
+        u.user_id,
         u.first_name,
         u.middle_name,
         u.last_name,
-        u.email
+        u.birth_date,
+        b.barangay_name,
+        MAX(CASE WHEN a.attr_key = 'residency_duration' THEN a.attr_value END) AS residency_duration,
+        MAX(CASE WHEN a.attr_key = 'indigency_income' THEN a.attr_value END) AS indigency_income,
+        MAX(CASE WHEN a.attr_key = 'ra_reference' THEN a.attr_value END) AS ra_reference
     FROM DocumentRequest dr
     JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
     JOIN Users u ON dr.user_id = u.user_id
+    JOIN Barangay b ON dr.barangay_id = b.barangay_id
     LEFT JOIN DocumentRequestAttribute a ON a.request_id = dr.document_request_id
     WHERE dr.document_request_id = :docRequestId
     GROUP BY dr.document_request_id;
@@ -45,222 +42,213 @@ if (!$docRequest) {
     exit();
 }
 
-$validityPeriods = [
-    'Barangay Clearance' => '+6 months',
-    'Certificate of Residency' => '+6 months',
-    'Certificate of Indigency' => '+3 months',
-    'Good Moral Character Certificate' => '+6 months',
-    'No Income Certificate' => '+1 month',
-    'Business Permit' => '+1 year',
-    'Solo Parent Certificate' => '+1 year'
+// Fetch officials
+$officialsSql = "
+    SELECT 
+        u.first_name, 
+        u.middle_name, 
+        u.last_name, 
+        r.role_name
+    FROM Users u
+    JOIN Role r ON u.role_id = r.role_id
+    WHERE u.barangay_id = :barangayId
+    AND r.role_name IN ('Barangay Captain', 'Barangay Secretary', 'Barangay Treasurer', 'Chief Officer', 'Barangay Councilor')
+    ORDER BY FIELD(r.role_name,
+        'Barangay Captain',
+        'Barangay Secretary',
+        'Barangay Treasurer',
+        'Chief Officer',
+        'Barangay Councilor'
+    )
+";
+
+$stmtOfficials = $pdo->prepare($officialsSql);
+$stmtOfficials->execute([':barangayId' => $docRequest['barangay_id']]);
+$officials = $stmtOfficials->fetchAll(PDO::FETCH_ASSOC);
+
+// Process officials data
+$officialsGrouped = [
+    'captain' => [],
+    'councilors' => [],
+    'secretary' => [],
+    'treasurer' => [],
+    'chief' => []
 ];
 
-$documentType = $docRequest['document_name'];
-$validUntil = date('F j, Y', strtotime($validityPeriods[$documentType] ?? '+3 months'));
+foreach ($officials as $official) {
+    switch ($official['role_name']) {
+        case 'Barangay Captain':
+            $officialsGrouped['captain'] = $official;
+            break;
+        case 'Barangay Councilor':
+            $officialsGrouped['councilors'][] = $official;
+            break;
+        case 'Barangay Secretary':
+            $officialsGrouped['secretary'] = $official;
+            break;
+        case 'Barangay Treasurer':
+            $officialsGrouped['treasurer'] = $official;
+            break;
+        case 'Chief Officer':
+            $officialsGrouped['chief'] = $official;
+            break;
+    }
+}
 
+// Calculate age
+$birthDate = new DateTime($docRequest['birth_date']);
+$today = new DateTime();
+$age = $today->diff($birthDate)->y;
+
+// Format names
 $middle = !empty($docRequest['middle_name']) ? $docRequest['middle_name'] . " " : "";
-$requesterName = "{$docRequest['first_name']} $middle{$docRequest['last_name']}";
+$requesterName = strtoupper("{$docRequest['first_name']} $middle{$docRequest['last_name']}");
+
+// Format date
+$requestDate = new DateTime($docRequest['request_date']);
+$formattedDate = $requestDate->format('jS \d\a\y \o\f F, Y');
+
+// Document-specific variables
+$docType = $docRequest['document_name'];
+$purpose = '';
+$additionalContent = '';
+$showIndigency = false;
+$showRA = false;
+
+switch ($docType) {
+    case 'First Time Jobseeker Certification':
+        $purpose = 'availing the benefits of Republic Act 11261 (First Time Jobseeker Act of 2019)';
+        $showRA = true;
+        break;
+    case 'Certificate of Indigency':
+        $purpose = 'FINANCIAL ASSISTANCE purposes only';
+        $showIndigency = true;
+        break;
+    default: // General Certification
+        $purpose = 'any legal intent and purposes';
+        break;
+}
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Official Document - <?= htmlspecialchars($docRequest['document_name']) ?></title>
+    <title><?= $docType ?> - <?= htmlspecialchars($docRequest['barangay_name']) ?></title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Source+Serif+Pro:wght@400;600&display=swap');
-        
-        :root {
-            --primary-color: #2c3e50;
-            --secondary-color: #7f8c8d;
-        }
-
         body {
-            font-family: 'Source Serif Pro', serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 40px;
-            color: var(--primary-color);
+            font-family: 'Times New Roman', serif;
+            line-height: 1.5;
+            margin: 2cm;
         }
-
-        .letterhead {
-            border-bottom: 3px double var(--primary-color);
-            margin-bottom: 2rem;
-            padding-bottom: 1rem;
+        .header {
             text-align: center;
+            margin-bottom: 1.5cm;
         }
-
-        .letterhead h1 {
-            font-size: 2.5rem;
-            margin: 0 0 0.5rem;
-            letter-spacing: 1.5px;
+        .certificate-title {
+            font-size: 24pt;
+            margin-bottom: 0.5cm;
+            text-decoration: underline;
         }
-
-        .document-container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            padding: 40px;
-            border: 1px solid #ddd;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        .content {
+            font-size: 12pt;
+            text-align: justify;
+            margin-bottom: 1.5cm;
         }
-
-        .section-title {
-            font-size: 1.2rem;
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 0.5rem;
-            margin: 2rem 0 1.5rem;
-            text-transform: uppercase;
+        .signatures {
+            margin-top: 2cm;
         }
-
-        .detail-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1rem;
-            margin-bottom: 2rem;
+        .signature-block {
+            margin: 1cm 0;
         }
-
-        .detail-item strong {
-            display: block;
-            color: var(--secondary-color);
-            margin-bottom: 0.3rem;
-        }
-
-        .official-stamp {
-            margin-top: 3rem;
-            text-align: right;
-        }
-
         .signature-line {
-            display: inline-block;
-            border-bottom: 2px solid var(--primary-color);
-            width: 200px;
-            margin-top: 40px;
+            border-bottom: 1px solid #000;
+            width: 60%;
+            margin: 10px 0;
         }
-
-        .print-controls {
+        .official-list {
+            margin: 5px 0;
+        }
+        .footer-note {
+            font-size: 10pt;
             text-align: center;
-            margin-bottom: 2rem;
+            margin-top: 1cm;
         }
-
-        .print-button {
-            background: var(--primary-color);
-            color: white;
-            border: none;
-            padding: 12px 25px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 1rem;
-            transition: background 0.3s ease;
-        }
-
-        .print-button:hover {
-            background: #34495e;
-        }
-
-        @media print {
-            .print-controls {
-                display: none;
-            }
-            .document-container {
-                border: none;
-                box-shadow: none;
-                padding: 0;
-            }
+        .uppercase {
+            text-transform: uppercase;
         }
     </style>
 </head>
 <body>
-    <div class="document-container">
-        <div class="print-controls">
-            <button class="print-button" onclick="window.print()">Print Official Document</button>
-        </div>
+    <div class="header">
+        <h3>REPUBLIC OF THE PHILIPPINES</h3>
+        <h3>PROVINCE OF BULACAN</h3>
+        <h3>MUNICIPALITY OF SAN RAFAEL</h3>
+        <h3>BARANGAY CAINGIN</h3>
+        <h4>OFFICE OF THE PUNONG BARANGAY</h4>
+    </div>
 
-        <div class="letterhead">
-            <h1>Office of the Barangay Chairman</h1>
-            <p>123 Municipal Street, Barangay 123, Sample City, Philippines</p>
-        </div>
+    <div class="content">
+        <h1 class="certificate-title"><?= $docType ?></h1>
+        
+        <p>To Whom It May Concern:</p>
+        
+        <p>This is to certify that <strong class="uppercase"><?= $requesterName ?></strong>, 
+        <?= $age ?> years old<?= $docType === 'General Certification' ? ',' : '' ?> 
+        <?php if(isset($docRequest['residency_duration'])): ?>
+            has been a bonafide resident of <?= htmlspecialchars($docRequest['barangay_name']) ?> 
+            for <?= htmlspecialchars($docRequest['residency_duration']) ?>,
+        <?php endif; ?>
+        and has never been accused nor charged of any misbehavior in this barangay.</p>
 
-        <div class="document-header">
-            <h2><?= htmlspecialchars($docRequest['document_name']) ?></h2>
-            <?php if ($docRequest['document_description']): ?>
-                <p class="document-description"><?= htmlspecialchars($docRequest['document_description']) ?></p>
-            <?php endif; ?>
-        </div>
-
-        <div class="section-title">Requester Information</div>
-        <div class="detail-grid">
-            <div class="detail-item">
-                <strong>Full Name</strong>
-                <?= htmlspecialchars($requesterName) ?>
-            </div>
-            <div class="detail-item">
-                <strong>Request Date</strong>
-                <?= date('F j, Y', strtotime($docRequest['request_date'])) ?>
-            </div>
-            <div class="detail-item">
-                <strong>Contact Email</strong>
-                <?= htmlspecialchars($docRequest['email']) ?>
-            </div>
-            <div class="detail-item">
-                <strong>Delivery Method</strong>
-                <?= htmlspecialchars(ucfirst($docRequest['delivery_method'])) ?>
-            </div>
-        </div>
-
-        <div class="section-title">Document Details</div>
-        <div class="detail-grid">
-            <?php if ($docRequest['clearance_purpose']): ?>
-            <div class="detail-item">
-                <strong>Clearance Purpose</strong>
-                <?= htmlspecialchars($docRequest['clearance_purpose']) ?>
-            </div>
-            <?php endif; ?>
-
-            <?php if ($docRequest['residency_duration']): ?>
-            <div class="detail-item">
-                <strong>Residency Duration</strong>
-                <?= htmlspecialchars($docRequest['residency_duration']) ?>
-            </div>
-            <?php endif; ?>
-
-            <?php if ($docRequest['gmc_purpose']): ?>
-            <div class="detail-item">
-                <strong>Certificate Purpose</strong>
-                <?= htmlspecialchars($docRequest['gmc_purpose']) ?>
-            </div>
-            <?php endif; ?>
-
-            <?php if ($docRequest['indigency_income'] || $docRequest['indigency_reason']): ?>
-            <div class="detail-item">
-                <strong>Monthly Income</strong>
-                <?= $docRequest['indigency_income'] ? htmlspecialchars($docRequest['indigency_income']) : 'N/A' ?>
-            </div>
-            <div class="detail-item">
-                <strong>Indigency Reason</strong>
-                <?= $docRequest['indigency_reason'] ? htmlspecialchars($docRequest['indigency_reason']) : 'N/A' ?>
-            </div>
-            <?php endif; ?>
-        </div>
-
-        <?php if ($docRequest['remarks']): ?>
-        <div class="section-title">Additional Remarks</div>
-        <p><?= htmlspecialchars($docRequest['remarks']) ?></p>
+        <?php if($showIndigency): ?>
+            <p>This further certifies that <?= $requesterName ?> is one of the INDIGENT FAMILIES 
+            residing in our barangay with <?= $docRequest['indigency_income'] ?? 'no fixed income' ?> 
+            as per our records.</p>
         <?php endif; ?>
 
-        <div class="official-stamp">
-            <div class="signature-line"></div>
-            <p>Authorized Signature</p>
-            <div style="margin-top: 20px;">
-                <em>Official Seal</em>
-                <div style="width: 100px; height: 100px; border: 2px solid var(--primary-color); 
-                     display: inline-block; margin-left: 1rem;"></div>
+        <?php if($showRA): ?>
+            <p>This also certifies that <?= $requesterName ?> is a FIRST-TIME JOBSEEKER 
+            from our barangay <?= $docRequest['ra_reference'] ?? 'availing benefits under RA 11261' ?>.</p>
+        <?php endif; ?>
+
+        <p>This certification is issued this <?= $formattedDate ?> for <?= $purpose ?>.</p>
+    </div>
+
+    <div class="signatures">
+        <?php if(!empty($officialsGrouped['captain'])): ?>
+            <div class="signature-block">
+                <div class="signature-line"></div>
+                <strong>PUNONG BARANGAY</strong><br>
+                <?= strtoupper($officialsGrouped['captain']['first_name'] . ' ' . $officialsGrouped['captain']['last_name']) ?>
+            </div>
+        <?php endif; ?>
+
+        <div class="signature-block">
+            <strong>BARANGAY COUNCILORS:</strong>
+            <div class="official-list">
+                <?php foreach($officialsGrouped['councilors'] as $councilor): ?>
+                    <?= strtoupper($councilor['first_name'] . ' ' . $councilor['last_name']) ?><br>
+                <?php endforeach; ?>
             </div>
         </div>
 
-        <div style="margin-top: 3rem; font-size: 0.9em; color: var(--secondary-color);">
-            <p>This document is electronically generated and requires an official signature and seal for validity.<br>
-            Valid until: <?= $validUntil ?></p>
+        <div class="signature-block" style="margin-top: 1.5cm;">
+            <?php foreach(['secretary', 'treasurer', 'chief'] as $role): ?>
+                <?php if(!empty($officialsGrouped[$role])): ?>
+                    <div style="display: inline-block; width: 30%; margin-right: 2%;">
+                        <div class="signature-line"></div>
+                        <strong><?= strtoupper(str_replace('_', ' ', $role)) ?></strong><br>
+                        <?= strtoupper($officialsGrouped[$role]['first_name'] . ' ' . $officialsGrouped[$role]['last_name']) ?>
+                    </div>
+                <?php endif; ?>
+            <?php endforeach; ?>
         </div>
+    </div>
+
+    <div class="footer-note">
+        <p>NOT VALID WITHOUT DRY SEAL</p>
+        <p>Pagpapaunlad ng <?= htmlspecialchars($docRequest['barangay_name']) ?>...... Pagtulungan Natin!</p>
     </div>
 </body>
 </html>

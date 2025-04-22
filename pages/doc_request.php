@@ -58,18 +58,24 @@ if (isset($_GET['action'])) {
         // (A) VIEW DETAILS OF A SPECIFIC REQUEST
         // ---------------------------------------
         if ($action === 'view_doc_request') {
-            $stmt = $pdo->prepare("
+          $stmt = $pdo->prepare("
               SELECT
                   dr.document_request_id,
                   dr.request_date,
                   dr.status,
                   dr.delivery_method,
-                  dr.remarks AS request_remarks,
+                  dr.remarks              AS request_remarks,
                   dt.document_name,
-                  u.user_id, u.email, u.contact_number, u.birth_date,
-                  u.gender, u.marital_status,
-                  u.emergency_contact_name, u.emergency_contact_number,
-                  u.emergency_contact_address, u.id_image_path,
+                  u.user_id,
+                  u.email,
+                  u.contact_number,
+                  u.birth_date,
+                  u.gender,
+                  u.marital_status,
+                  u.emergency_contact_name,
+                  u.emergency_contact_number,
+                  u.emergency_contact_address,
+                  u.id_image_path,
                   CONCAT(u.first_name,' ',COALESCE(u.middle_name,''),' ',u.last_name) AS full_name,
                   MAX(CASE WHEN a.attr_key='clearance_purpose'  THEN a.attr_value END) AS clearance_purpose,
                   MAX(CASE WHEN a.attr_key='residency_duration' THEN a.attr_value END) AS residency_duration,
@@ -79,13 +85,18 @@ if (isset($_GET['action'])) {
                   MAX(CASE WHEN a.attr_key='indigency_income'   THEN a.attr_value END) AS indigency_income,
                   MAX(CASE WHEN a.attr_key='indigency_reason'   THEN a.attr_value END) AS indigency_reason
               FROM DocumentRequest dr
-              JOIN DocumentType  dt ON dr.document_type_id = dt.document_type_id
-              JOIN Users         u  ON dr.user_id          = u.user_id
-              LEFT JOIN DocumentRequestAttribute a ON a.request_id = dr.document_request_id
-              WHERE dr.document_request_id = :id
+              JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+              JOIN Users u ON dr.user_id = u.user_id
+              LEFT JOIN DocumentRequestAttribute a ON dr.document_request_id = a.request_id
+              WHERE dr.barangay_id         = :bid
+                AND dr.document_request_id = :id
+                AND LOWER(dr.status)       = 'pending'
               GROUP BY dr.document_request_id
-            ");
-            $stmt->execute([':id' => $reqId]);
+          ");
+          $stmt->execute([
+              ':bid' => $bid,
+              ':id'  => $reqId
+          ]);
             $result = $stmt->fetch();
 
             if ($result) {
@@ -104,7 +115,7 @@ if (isset($_GET['action'])) {
         } elseif ($action === 'send_email') {
 
           // 1) Fetch requester's info
-          $stmt = $pdo->prepare("
+              $stmt = $pdo->prepare("
               SELECT 
                   dr.document_request_id,
                   dt.document_name,
@@ -114,8 +125,12 @@ if (isset($_GET['action'])) {
               JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
               JOIN Users u ON dr.user_id = u.user_id
               WHERE dr.document_request_id = :id
+                AND dr.barangay_id          = :bid
           ");
-          $stmt->execute([':id' => $reqId]);
+          $stmt->execute([
+              ':id'  => $reqId,
+              ':bid' => $bid
+          ]);
           $result = $stmt->fetch();
       
           if ($result && !empty($result['email'])) {
@@ -154,12 +169,16 @@ if (isset($_GET['action'])) {
                   $mail->addStringAttachment($pdfOutput, $pdfFileName, 'base64', 'application/pdf');
       
                   if ($mail->send()) {
-                      $updateStmt = $pdo->prepare("
-                          UPDATE DocumentRequest 
-                          SET status = 'Complete' 
-                          WHERE document_request_id = :id
-                      ");
-                      $updateStmt->execute([':id' => $reqId]);
+                    $updateStmt = $pdo->prepare("
+                      UPDATE DocumentRequest 
+                        SET status = 'Complete' 
+                      WHERE document_request_id = :id
+                        AND barangay_id          = :bid
+                        ");
+                        $updateStmt->execute([
+                            ':id'  => $reqId,
+                            ':bid' => $bid
+                        ]);
       
                       logAuditTrail(
                           $pdo, 
@@ -186,28 +205,29 @@ if (isset($_GET['action'])) {
         // -------------------------------------
         } elseif ($action === 'complete') {
 
-            // 1) Mark as complete (Hardcopy scenario)
-            $stmt = $pdo->prepare("
-                UPDATE DocumentRequest 
-                SET status = 'Complete' 
-                WHERE document_request_id = :id
-            ");
-            if ($stmt->execute([':id' => $reqId])) {
-                // Log to audit trail
-                logAuditTrail(
-                    $pdo,
-                    $current_admin_id,
-                    'UPDATE',
-                    'DocumentRequest',
-                    $reqId,
-                    'Manually marked document as complete (hardcopy).'
-                );
-
-                $response['success'] = true;
-                $response['message'] = 'Document request marked as complete.';
-            } else {
-                $response['message'] = 'Unable to mark request as complete.';
-            }
+          $stmt = $pdo->prepare("
+          UPDATE DocumentRequest 
+             SET status = 'Complete' 
+           WHERE document_request_id = :id
+             AND barangay_id          = :bid
+      ");
+      if ($stmt->execute([
+          ':id'  => $reqId,
+          ':bid' => $bid
+      ])) {
+          logAuditTrail(
+              $pdo,
+              $current_admin_id,
+              'UPDATE',
+              'DocumentRequest',
+              $reqId,
+              'Manually marked document as complete (hardcopy).'
+          );
+          $response['success'] = true;
+          $response['message'] = 'Document request marked as complete.';
+      } else {
+          $response['message'] = 'Unable to mark request as complete.';
+      }
 
         // -----------------------------
         // (D) DELETE (WITH REMARKS)
@@ -218,24 +238,29 @@ if (isset($_GET['action'])) {
 
             // 1) Fetch request info + user email
             $stmt = $pdo->prepare("
-                SELECT 
-                    dr.document_request_id,
-                    dt.document_name,
-                    u.email,
-                    CONCAT(u.first_name, ' ', u.last_name) AS requester_name
-                FROM DocumentRequest dr
-                JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-                JOIN Users u ON dr.user_id = u.user_id
-                WHERE dr.document_request_id = :id
-            ");
-            $stmt->execute([':id' => $reqId]);
-            $requestInfo = $stmt->fetch();
-
-            if (!$requestInfo) {
-                $response['message'] = 'Request not found; cannot delete.';
-                echo json_encode($response);
-                exit;
-            }
+            SELECT 
+                dr.document_request_id,
+                dt.document_name,
+                u.email,
+                CONCAT(u.first_name, ' ', u.last_name) AS requester_name
+            FROM DocumentRequest dr
+            JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+            JOIN Users u ON dr.user_id = u.user_id
+            WHERE dr.document_request_id = :id
+              AND dr.barangay_id          = :bid
+        ");
+        $stmt->execute([
+            ':id'  => $reqId,
+            ':bid' => $bid
+        ]);
+        $requestInfo = $stmt->fetch();
+    
+        if (! $requestInfo) {
+            $response['message'] = 'Request not found; cannot delete.';
+            echo json_encode($response);
+            exit;
+        }
+    
 
             // 2) Email user about the reason for deletion
             if (!empty($requestInfo['email'])) {
@@ -266,24 +291,73 @@ if (isset($_GET['action'])) {
             }
 
             // 3) Delete from DB
-            $stmtDel = $pdo->prepare("DELETE FROM DocumentRequest WHERE document_request_id = :id");
-            if ($stmtDel->execute([':id' => $reqId])) {
-                // Log to audit trail
-                logAuditTrail(
-                    $pdo,
-                    $current_admin_id,
-                    'DELETE',
-                    'DocumentRequest',
-                    $reqId,
-                    'Deleted document request with remarks: ' . $remarks
-                );
-
-                $response['success'] = true;
-                $response['message'] = 'Document request deleted successfully.';
-            } else {
-                $response['message'] = 'Unable to delete document request.';
-            }
+            $stmtDel = $pdo->prepare("
+            DELETE FROM DocumentRequest 
+             WHERE document_request_id = :id
+               AND barangay_id          = :bid
+        ");
+        if ($stmtDel->execute([
+            ':id'  => $reqId,
+            ':bid' => $bid
+        ])) {
+            logAuditTrail(
+                $pdo,
+                $current_admin_id,
+                'DELETE',
+                'DocumentRequest',
+                $reqId,
+                'Deleted document request with remarks: ' . $remarks
+            );
+            $response['success'] = true;
+            $response['message'] = 'Document request deleted successfully.';
+        } else {
+            $response['message'] = 'Unable to delete document request.';
         }
+      }elseif ($action === 'get_requests') {
+        // Get pending requests
+        $stmtPending = $pdo->prepare("
+            SELECT 
+                dr.document_request_id,
+                dr.request_date,
+                dr.status,
+                dr.delivery_method,
+                dt.document_name,
+                CONCAT(u.first_name, ' ', u.last_name) AS requester_name
+            FROM DocumentRequest dr
+            JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+            JOIN Users u ON dr.user_id = u.user_id
+            WHERE u.barangay_id = :bid
+              AND LOWER(dr.status) = 'pending'
+            ORDER BY dr.request_date ASC
+        ");
+        $stmtPending->execute([':bid' => $bid]);
+        $pending = $stmtPending->fetchAll(PDO::FETCH_ASSOC);
+    
+        // Get completed requests
+        $stmtCompleted = $pdo->prepare("
+            SELECT 
+                dr.document_request_id,
+                dr.request_date,
+                dr.status,
+                dr.delivery_method,
+                dt.document_name,
+                CONCAT(u.first_name, ' ', u.last_name) AS requester_name
+            FROM DocumentRequest dr
+            JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+            JOIN Users u ON dr.user_id = u.user_id
+            WHERE u.barangay_id = :bid
+              AND LOWER(dr.status) = 'complete'
+            ORDER BY dr.request_date ASC
+        ");
+        $stmtCompleted->execute([':bid' => $bid]);
+        $completed = $stmtCompleted->fetchAll(PDO::FETCH_ASSOC);
+    
+        echo json_encode([
+            'pending' => $pending,
+            'completed' => $completed
+        ]);
+        exit;
+    }
 
     } catch (Exception $ex) {
         $response['message'] = 'Server Error: ' . $ex->getMessage();

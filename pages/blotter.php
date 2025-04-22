@@ -69,9 +69,59 @@ function getResidents($pdo, $bid) {
     $stmt->execute([$bid]);
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
+function validateBlotterData(array $data, &$errors) {
+  // location & description
+  if (empty(trim($data['location'] ?? ''))) {
+      $errors[] = 'Location is required.';
+  }
+  if (empty(trim($data['description'] ?? ''))) {
+      $errors[] = 'Description is required.';
+  }
+  // categories
+  if (empty($data['categories']) || !is_array($data['categories'])) {
+      $errors[] = 'At least one category must be selected.';
+  }
+  // participants
+  if (empty($data['participants']) || !is_array($data['participants'])) {
+      $errors[] = 'At least one participant is required.';
+  } else {
+      foreach ($data['participants'] as $idx => $p) {
+          if (!empty($p['user_id'])) {
+              if (!ctype_digit(strval($p['user_id']))) {
+                  $errors[] = "Participant #".($idx+1)." has invalid user ID.";
+              }
+          } else {
+              if (empty(trim($p['first_name'] ?? ''))) {
+                  $errors[] = "Participant #".($idx+1)." first name is required.";
+              }
+              if (empty(trim($p['last_name'] ?? ''))) {
+                  $errors[] = "Participant #".($idx+1)." last name is required.";
+              }
+              if (!empty($p['age']) && !ctype_digit(strval($p['age']))) {
+                  $errors[] = "Participant #".($idx+1)." age must be a number.";
+              }
+              if (!empty($p['gender']) && !in_array($p['gender'], ['Male','Female','Other'], true)) {
+                  $errors[] = "Participant #".($idx+1)." has invalid gender.";
+              }
+          }
+          if (empty(trim($p['role'] ?? ''))) {
+              $errors[] = "Participant #".($idx+1)." role is required.";
+          }
+      }
+  }
+  return empty($errors);
+}
 
 // === POST: Add New Case ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['blotter_submit'])) {
+  $categories = $_POST['categories'] ?? [];
+if (empty($categories) || !is_array($categories)) {
+    $_SESSION['error_message'] = 'At least one category must be selected.';
+    header('Location: blotter.php');
+    exit;
+}
+
+
     $location     = trim($_POST['location'] ?? '');
       if (!empty($_FILES['transcript_file']['tmp_name'])) {
         try {
@@ -116,31 +166,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['blotter_submit'])) {
                 $catStmt->execute([$caseId, (int)$catId]);
             }
         }
-
+        if (!empty($_POST['interventions']) && is_array($_POST['interventions'])) {
+          $intStmt = $pdo->prepare("
+              INSERT INTO BlotterCaseIntervention
+                (blotter_case_id, intervention_id, date_intervened)
+              VALUES (?, ?, NOW())
+          ");
+          foreach ($_POST['interventions'] as $intId) {
+              $intStmt->execute([$caseId, (int)$intId]);
+          }
+        }
         // Participants
         $regStmt = $pdo->prepare("
-            INSERT INTO BlotterParticipant
-            (blotter_case_id, user_id, role, is_registered)
-            VALUES (?, ?, ?, 'Yes')
-        ");
-        $unregStmt = $pdo->prepare("
-            INSERT INTO BlotterParticipant
-            (blotter_case_id, first_name, last_name, contact_number, role, is_registered)
-            VALUES (?, ?, ?, ?, ?, 'No')
-        ");
-        foreach ($participants as $p) {
-            if (!empty($p['user_id'])) {
-                $regStmt->execute([$caseId, (int)$p['user_id'], $p['role']]);
-            } else {
-                $unregStmt->execute([
-                    $caseId,
-                    $p['first_name'],
-                    $p['last_name'],
-                    $p['contact_number'] ?? null,
-                    $p['role']
-                ]);
-            }
+        INSERT INTO BlotterParticipant
+        (blotter_case_id, user_id, role, is_registered)
+        VALUES (?, ?, ?, 'Yes')
+    ");
+    $unregStmt = $pdo->prepare("
+        INSERT INTO BlotterParticipant
+        (blotter_case_id, first_name, last_name, contact_number, address, age, gender, role, is_registered)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'No')
+    ");
+    
+    foreach ($participants as $p) {
+        if (!empty($p['user_id'])) {
+            $regStmt->execute([$caseId, (int)$p['user_id'], $p['role']]);
+        } else {
+            $unregStmt->execute([
+                $caseId,
+                $p['first_name'],
+                $p['last_name'],
+                $p['contact_number'] ?? null,
+                $p['address'] ?? null,  // New field
+                $p['age'] ?? null,      // New field
+                $p['gender'] ?? null,   // New field
+                $p['role']
+            ]);
         }
+    }
 
         $pdo->commit();
         logAuditTrail($pdo, $current_admin_id, 'INSERT', 'BlotterCase', $caseId, "New case filed ($location)");
@@ -161,7 +224,7 @@ if (!empty($_GET['action'])) {
     $id     = intval($_GET['id'] ?? 0);
 
     if (in_array($action, ['delete','complete','set_status','add_intervention','update_case'], true)
-        && !in_array($role, [1,2], true)) {
+        && !in_array($role, [1,2,3], true)) {
         echo json_encode(['success'=>false,'message'=>'Permission denied']);
         exit;
     }
@@ -354,15 +417,21 @@ if (!empty($_GET['action'])) {
                 $caseData = $caseStmt->fetch(PDO::FETCH_ASSOC) ?: null;
 
                 $pStmt = $pdo->prepare("
-                    SELECT bp.participant_id,
-                           COALESCE(u.first_name,bp.first_name) AS first_name,
-                           COALESCE(u.last_name,bp.last_name) AS last_name,
-                           bp.role,
-                           CASE WHEN u.user_id IS NULL THEN 'No' ELSE 'Yes' END AS is_registered
-                    FROM BlotterParticipant bp
-                    LEFT JOIN Users u ON bp.user_id=u.user_id
-                    WHERE bp.blotter_case_id=?
-                ");
+    SELECT 
+        bp.participant_id,
+        bp.user_id,
+        COALESCE(u.first_name, bp.first_name) AS first_name,
+        COALESCE(u.last_name, bp.last_name) AS last_name,
+        bp.contact_number,
+        bp.address,       
+        bp.age,
+        bp.gender,
+        bp.role,
+        CASE WHEN u.user_id IS NULL THEN 'No' ELSE 'Yes' END AS is_registered
+    FROM BlotterParticipant bp
+    LEFT JOIN Users u ON bp.user_id = u.user_id
+    WHERE bp.blotter_case_id = ?
+            ");
                 $pStmt->execute([$id]);
 
                 $iStmt = $pdo->prepare("
@@ -418,15 +487,18 @@ if (!empty($_GET['action'])) {
                         WHERE blotter_case_id=?
                     ")->execute([$loc, $descr, $stat, $cid]);
 
-                    $pdo->prepare("DELETE FROM BlotterCaseCategory WHERE blotter_case_id=?")
-                        ->execute([$cid]);
-                    $catStmt = $pdo->prepare("
-                        INSERT INTO BlotterCaseCategory (blotter_case_id, category_id)
-                        VALUES (?,?)
+                    $pdo->prepare("DELETE FROM BlotterCaseIntervention WHERE blotter_case_id=?")
+                    ->execute([$cid]);
+                if (!empty($input['interventions']) && is_array($input['interventions'])) {
+                    $intStmt = $pdo->prepare("
+                        INSERT INTO BlotterCaseIntervention
+                          (blotter_case_id, intervention_id, date_intervened)
+                        VALUES (?, ?, NOW())
                     ");
-                    foreach ($input['categories'] ?? [] as $catId) {
-                        $catStmt->execute([$cid, (int)$catId]);
+                    foreach ($input['interventions'] as $intId) {
+                        $intStmt->execute([$cid, (int)$intId]);
                     }
+                }
 
                     $pdo->prepare("DELETE FROM BlotterParticipant WHERE blotter_case_id=?")
                         ->execute([$cid]);
@@ -436,24 +508,27 @@ if (!empty($_GET['action'])) {
                         VALUES (?, ?, ?, 'Yes')
                     ");
                     $unregStmt = $pdo->prepare("
-                        INSERT INTO BlotterParticipant
-                        (blotter_case_id, first_name, last_name, contact_number, role, is_registered)
-                        VALUES (?, ?, ?, ?, ?, 'No')
-                    ");
-                    foreach ($input['participants'] as $p) {
-                        if (!empty($p['user_id'])) {
-                            $regStmt->execute([$cid, (int)$p['user_id'], $p['role']]);
-                        } else {
-                            $unregStmt->execute([
-                                $cid,
-                                $p['first_name'],
-                                $p['last_name'],
-                                $p['contact_number'] ?? null,
-                                $p['role']
-                            ]);
-                        }
-                    }
-
+                    INSERT INTO BlotterParticipant
+                    (blotter_case_id, first_name, last_name, contact_number, address, age, gender, role, is_registered)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'No')
+                ");
+                
+                foreach ($input['participants'] as $p) {
+                  if (!empty($p['user_id'])) {
+                      $regStmt->execute([$cid, (int)$p['user_id'], $p['role']]);
+                  } else {
+                      $unregStmt->execute([
+                          $cid,
+                          $p['first_name'],
+                          $p['last_name'],
+                          $p['contact_number'] ?? null,
+                          $p['address'] ?? null,  // New field
+                          $p['age'] ?? null,      // New field
+                          $p['gender'] ?? null,   // New field
+                          $p['role']
+                      ]);
+                  }
+              }
                     $pdo->commit();
                     logAuditTrail($pdo, $current_admin_id, 'UPDATE', 'BlotterCase', $cid, "Edited case #{$cid}");
                     echo json_encode(['success'=>true]);
@@ -533,13 +608,33 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
             <textarea id="editDescription" name="description" rows="4" required
                       class="block p-2.5 w-full text-sm text-gray-900 bg-gray-50 rounded-lg border border-gray-300 focus:ring-blue-500 focus:border-blue-500"></textarea>
           </div>
+                  <!-- Interventions -->
+        <div class="space-y-2">
+          <label class="block text-sm font-medium text-gray-700">Interventions</label>
+          <div id="editInterventionContainer" class="grid grid-cols-2 gap-2">
+            <?php foreach ($interventions as $int): ?>
+              <label class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="interventions[]"
+                  value="<?= $int['intervention_id'] ?>"
+                >
+                <?= htmlspecialchars($int['intervention_name']) ?>
+              </label>
+            <?php endforeach; ?>
+          </div>
+        </div>
           <!-- Categories -->
           <div>
             <label class="block text-sm font-medium text-gray-700">Categories</label>
             <div id="editCategoryContainer" class="grid grid-cols-2 gap-2">
               <?php foreach ($categories as $cat): ?>
                 <label class="flex items-center gap-2">
-                  <input type="checkbox" name="categories[]" value="<?= $cat['category_id'] ?>">
+                <input
+            type="checkbox"
+            name="categories[]"
+            value="<?= $cat['category_id'] ?>"
+          >
                   <?= htmlspecialchars($cat['category_name']) ?>
                 </label>
               <?php endforeach; ?>
@@ -635,6 +730,22 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
               class="mt-1 block w-full text-sm text-gray-900"
             />
           </div>
+                <!-- Interventions -->
+      <div class="md:col-span-2">
+        <label class="block text-sm font-medium text-gray-700">Interventions</label>
+        <div class="grid grid-cols-2 gap-2">
+          <?php foreach ($interventions as $int): ?>
+            <label class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="interventions[]"
+                value="<?= $int['intervention_id'] ?>"
+              >
+              <?= htmlspecialchars($int['intervention_name']) ?>
+            </label>
+          <?php endforeach; ?>
+        </div>
+      </div>
           <!-- Categories -->
           <div>
           <label class="block text-sm font-medium text-gray-700">Categories <span class="text-red-500">*</span></label>
@@ -645,7 +756,6 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
                   type="checkbox"
                   name="categories[]"
                   value="<?= $cat['category_id'] ?>"
-                  <?= $i===0 ? 'required' : '' ?> 
                 >
                 <?= htmlspecialchars($cat['category_name']) ?>
               </label>
@@ -820,6 +930,10 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
 
   <script>
   document.addEventListener('DOMContentLoaded', () => {
+
+
+
+    
     const registeredTemplate = `
       <div class="participant flex gap-2 bg-blue-50 p-2 rounded mb-2">
         <input type="hidden" name="participants[INDEX][type]" value="registered">
@@ -836,22 +950,31 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
         </select>
         <button type="button" class="remove-participant px-2 bg-red-500 text-white rounded">×</button>
       </div>`;
-    const unregisteredTemplate = `
-      <div class="participant flex gap-2 bg-green-50 p-2 rounded mb-2">
-        <input type="hidden" name="participants[INDEX][type]" value="unregistered">
-        <input type="hidden" name="participants[INDEX][user_id]" value="">
-        <div class="flex-1 grid grid-cols-2 gap-2">
-          <input type="text" name="participants[INDEX][first_name]" placeholder="First Name" class="p-2 border rounded" required>
-          <input type="text" name="participants[INDEX][last_name]" placeholder="Last Name" class="p-2 border rounded" required>
-          <input type="text" name="participants[INDEX][contact_number]" placeholder="Contact Number" class="p-2 border rounded">
-        </div>
-        <select name="participants[INDEX][role]" class="w-28 p-2 border rounded">
-          <option value="Complainant">Complainant</option>
-          <option value="Respondent">Respondent</option>
-          <option value="Witness">Witness</option>
+      const unregisteredTemplate = `
+<div class="participant flex gap-2 bg-green-50 p-2 rounded mb-2">
+    <input type="hidden" name="participants[INDEX][type]" value="unregistered">
+    <div class="flex-1 grid grid-cols-2 gap-2">
+        <input type="text" name="participants[INDEX][first_name]" placeholder="First Name" required class="p-2 border rounded">
+        <input type="text" name="participants[INDEX][last_name]" placeholder="Last Name" required class="p-2 border rounded">
+        <input type="text" name="participants[INDEX][contact_number]" placeholder="Contact" class="p-2 border rounded">
+        <!-- Add these fields -->
+        <input type="text" name="participants[INDEX][address]" placeholder="Address" class="p-2 border rounded">
+        <input type="number" name="participants[INDEX][age]" placeholder="Age" class="p-2 border rounded">
+        <select name="participants[INDEX][gender]" class="p-2 border rounded">
+            <option value="">Gender</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Other">Other</option>
         </select>
-        <button type="button" class="remove-participant px-2 bg-red-500 text-white rounded">×</button>
-      </div>`;
+    </div>
+    <select name="participants[INDEX][role]" class="w-28 p-2 border rounded">
+        <option value="Complainant">Complainant</option>
+        <option value="Respondent">Respondent</option>
+        <option value="Witness">Witness</option>
+    </select>
+    <button type="button" class="remove-participant px-2 bg-red-500 text-white rounded">×</button>
+</div>`;
+
 
     function addParticipant(template, container) {
       const idx = container.children.length;
@@ -931,9 +1054,17 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
       document.getElementById('viewStatus').textContent        = d.case.status;
 
       // Build lists
-      const pList = d.participants.length
-        ? d.participants.map(p => `<li>${p.first_name} ${p.last_name} – ${p.role} ${p.is_registered ? '' : '(Unregistered)'}</li>`).join('')
-        : '<li>None</li>';
+      const pList = d.participants.map(p => {
+    let details = [];
+    if (p.is_registered === 'No') {
+        if (p.contact_number) details.push(`Contact: ${p.contact_number}`);
+        if (p.address) details.push(`Address: ${p.address}`);
+        if (p.age) details.push(`Age: ${p.age}`);
+        if (p.gender) details.push(`Gender: ${p.gender}`);
+    }
+    return `<li>${p.first_name} ${p.last_name} (${p.role}) 
+            ${details.length > 0 ? '<br>Details: ' + details.join(', ') : ''}</li>`;
+}).join('');
       document.getElementById('viewParticipants').innerHTML = pList;
 
       const iList = d.interventions.length
@@ -1004,50 +1135,132 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
     // Edit button handler
     document.body.addEventListener('click', async e => {
       if (!e.target.classList.contains('edit-btn')) return;
-      const id = e.target.dataset.id;
-      editForm.reset();
-      editPartCont.innerHTML = '';
-      Swal.fire({ title:'Loading...', didOpen:()=>Swal.showLoading(), showConfirmButton:false });
-      const res = await fetch(`?action=get_case_details&id=${id}`);
-      const d = await res.json();
-      if (!d.success) { Swal.fire('Error', d.message, 'error'); return; }
-      document.getElementById('editCaseId').value   = id;
-      document.getElementById('editLocation').value = d.case.location;
-      document.getElementById('editDescription').value = d.case.description;
-      document.getElementById('editStatus').value     = d.case.status;
-      const cats = d.case.categories?.split(', ') || [];
-      document.querySelectorAll('#editCategoryContainer input[type="checkbox"]').forEach(cb => {
-        cb.checked = cats.includes(cb.parentElement.textContent.trim());
-      });
-      d.participants.forEach((p, idx) => {
-        const tmpl = p.is_registered==='Yes' ? registeredTemplate : unregisteredTemplate;
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = tmpl.replace(/INDEX/g, idx);
-        const node = wrapper.firstElementChild;
-        if (p.is_registered==='Yes') {
-          node.querySelector('select[name$="[user_id]"]').value = p.user_id;
+  const id = e.target.dataset.id;
+
+  // reset form & clear checks
+  editForm.reset();
+  editPartCont.innerHTML = '';
+  document.querySelectorAll('#editCategoryContainer input, #editInterventionContainer input')
+          .forEach(cb => cb.checked = false);
+
+  Swal.fire({ title: 'Loading…', didOpen: () => Swal.showLoading(), showConfirmButton: false });
+  const response = await fetch(`?action=get_case_details&id=${id}`);
+  const payload  = await response.json();
+  Swal.close();
+
+  if (!payload.success) {
+    Swal.fire('Error', payload.message, 'error');
+    return;
+  }
+
+  // populate fields
+  document.getElementById('editCaseId').value      = id;
+  document.getElementById('editLocation').value    = payload.case.location;
+  document.getElementById('editDescription').value = payload.case.description;
+  document.getElementById('editStatus').value      = payload.case.status;
+
+  // autofill categories by name
+  const cats = payload.case.categories
+    ? payload.case.categories.split(',').map(s => s.trim())
+    : [];
+  document.querySelectorAll('#editCategoryContainer label').forEach(label => {
+    const box = label.querySelector('input[type="checkbox"]');
+    if (cats.includes(label.textContent.trim())) box.checked = true;
+  });
+
+  // autofill interventions by name
+  const ints = payload.interventions.map(i => i.intervention_name);
+  document.querySelectorAll('#editInterventionContainer label').forEach(label => {
+    const box = label.querySelector('input[type="checkbox"]');
+    if (ints.includes(label.textContent.trim())) box.checked = true;
+  });
+
+  // build participants
+  payload.participants.forEach((p, idx) => {
+    const tmpl = p.is_registered === 'Yes' ? registeredTemplate : unregisteredTemplate;
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = tmpl.replace(/INDEX/g, idx);
+    const node = wrapper.firstElementChild;
+
+    if (p.is_registered === 'Yes') {
+      node.querySelector('select[name$="[user_id]"]').value = p.user_id;
+    } else {
+      node.querySelector('input[name$="[first_name]"]').value     = p.first_name;
+      node.querySelector('input[name$="[last_name]"]').value      = p.last_name;
+      node.querySelector('input[name$="[contact_number]"]').value = p.contact_number || '';
+      node.querySelector('input[name$="[address]"]').value        = p.address        || '';
+      node.querySelector('input[name$="[age]"]').value            = p.age            || '';
+      node.querySelector('select[name$="[gender]"]').value        = p.gender         || '';
+    }
+    node.querySelector('select[name$="[role]"]').value = p.role;
+    node.querySelector('.remove-participant').addEventListener('click', () => node.remove());
+    editPartCont.appendChild(node);
+  });
+
+  // finally, show the modal
+  editModal.classList.remove('hidden');
+});
+
+  // 2) Single, consolidated submit handler
+  editForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const formData = {
+      case_id:       document.getElementById('editCaseId').value,
+      location:      document.getElementById('editLocation').value.trim(),
+      description:   document.getElementById('editDescription').value.trim(),
+      status:        document.getElementById('editStatus').value,
+      categories:    Array.from(
+                       document.querySelectorAll('#editCategoryContainer input:checked')
+                     ).map(cb => cb.value),
+      participants:  Array.from(editPartCont.children).map(node => {
+        const isReg = !!node.querySelector('select[name$="[user_id]"]');
+        if (isReg) {
+          return {
+            user_id: node.querySelector('select[name$="[user_id]"]').value,
+            role:    node.querySelector('select[name$="[role]"]').value
+          };
         } else {
-          node.querySelector('input[name$="[first_name]"]').value = p.first_name;
-          node.querySelector('input[name$="[last_name]"]').value = p.last_name;
-          node.querySelector('input[name$="[contact_number]"]').value = p.contact_number || '';
+          return {
+            first_name: node.querySelector('input[name$="[first_name]"]').value.trim(),
+            last_name: node.querySelector('input[name$="[last_name]"]').value.trim(),
+                contact_number: node.querySelector('input[name$="[contact_number]"]').value.trim(),
+                address: node.querySelector('input[name$="[address]"]').value.trim(),
+                age: node.querySelector('input[name$="[age]"]').value,
+                gender: node.querySelector('select[name$="[gender]"]').value,
+                role: node.querySelector('select[name$="[role]"]').value
+          };
         }
-        node.querySelector('select[name$="[role]"]').value = p.role;
-        node.querySelector('.remove-participant')
-           .addEventListener('click', () => node.remove());
-        editPartCont.appendChild(node);
-      });
-      Swal.close();
-      editModal.classList.remove('hidden');
+      })
+    };
+
+    Swal.fire({ title:'Saving…', didOpen:()=>Swal.showLoading() });
+    const res = await fetch('?action=update_case', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(formData)
     });
+    const d = await res.json();
+    if (d.success) {
+      Swal.fire('Saved!','Case updated successfully','success')
+        .then(() => { editModal.classList.add('hidden'); location.reload(); });
+    } else {
+      Swal.fire('Error', d.message || 'Failed', 'error');
+    }
+  });
 
     // Edit form submit
     editForm.addEventListener('submit', async e => {
       e.preventDefault();
+      const categoryNames = d.case.categories
+  ? d.case.categories.split(', ').map(s => s.trim())
+  : [];
+
       const formData = {
         case_id: document.getElementById('editCaseId').value,
         location: document.getElementById('editLocation').value.trim(),
         description: document.getElementById('editDescription').value.trim(),
         status: document.getElementById('editStatus').value,
+        
         categories: Array.from(
           document.querySelectorAll('#editCategoryContainer input[type="checkbox"]:checked')
         ).map(cb => cb.value),
@@ -1086,6 +1299,29 @@ $interventions = $pdo->query("SELECT * FROM CaseIntervention ORDER BY interventi
       }
     });
   });
+
+
+  if (d.case.categories) {
+  const categoryNames = d.case.categories.split(', ');
+  document.querySelectorAll('#editCategoryContainer input[type="checkbox"]').forEach(cb => {
+    const categoryLabel = cb.parentElement.textContent.trim();
+    if (categoryNames.includes(categoryLabel)) {
+      cb.checked = true;
+    }
+    
+  });
+}
+const selInts = d.interventions.map(i => String(i.intervention_id));
+document.querySelectorAll('#editInterventionContainer input[type="checkbox"]').forEach(cb => {
+  if (selInts.includes(cb.value)) cb.checked = true;
+});
+document.getElementById('addBlotterForm').addEventListener('submit', function(e) {
+  const checked = document.querySelectorAll('#addBlotterForm input[name="categories[]"]:checked');
+  if (checked.length === 0) {
+    e.preventDefault();
+    Swal.fire('Error','Please select at least one category','error');
+  }
+});
   </script>
 </section>
 </body>

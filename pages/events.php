@@ -1,6 +1,6 @@
 <?php
 session_start();
-
+//events.php
 // ── 1) Dependencies & DB connection ───────────────────────────────
 require "../vendor/autoload.php";
 require "../config/dbconn.php";   // defines $pdo
@@ -73,108 +73,151 @@ function sendEventEmails(PDO $pdo, array $event, int $barangayId, string $type) 
 }
 // ── 3) Handle form submissions ────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Sanitize and validate input
-    $title = filter_input(INPUT_POST, 'title', FILTER_SANITIZE_STRING);
-    $description = filter_input(INPUT_POST, 'description', FILTER_SANITIZE_STRING);
-    $start_datetime = filter_input(INPUT_POST, 'start_datetime', FILTER_SANITIZE_STRING);
-    $end_datetime = filter_input(INPUT_POST, 'end_datetime', FILTER_SANITIZE_STRING);
-    $location = filter_input(INPUT_POST, 'location', FILTER_SANITIZE_STRING);
-    $organizer = filter_input(INPUT_POST, 'organizer', FILTER_SANITIZE_STRING);
-    $event_id = filter_input(INPUT_POST, 'event_id', FILTER_VALIDATE_INT) ?: 0;
+    // 1) Fetch & sanitize raw inputs
+    $titleRaw       = $_POST['title']          ?? '';
+    $descriptionRaw = $_POST['description']    ?? '';
+    $startRaw       = $_POST['start_datetime'] ?? '';
+    $endRaw         = $_POST['end_datetime']   ?? '';
+    $locationRaw    = $_POST['location']       ?? '';
+    $organizerRaw   = $_POST['organizer']      ?? '';
+    $event_id       = isset($_POST['event_id']) ? (int) $_POST['event_id'] : 0;
 
-    // Common data for both insert/update
-    $barangay_id = $_SESSION['barangay_id'];
-    $created_by = $_SESSION['user_id'];
+    $title       = trim(filter_var($titleRaw,       FILTER_SANITIZE_FULL_SPECIAL_CHARS));
+    $description = trim(filter_var($descriptionRaw, FILTER_SANITIZE_FULL_SPECIAL_CHARS));
+    $location    = trim(filter_var($locationRaw,    FILTER_SANITIZE_FULL_SPECIAL_CHARS));
+    $organizer   = trim(filter_var($organizerRaw,   FILTER_SANITIZE_FULL_SPECIAL_CHARS));
 
-    try {
-        if (isset($_POST['delete']) && $event_id) {
-            // Handle event postponement
-            $stmt = $pdo->prepare(
-                "UPDATE events 
-                 SET status = 'postponed'
-                 WHERE event_id = ? AND barangay_id = ?"
-            );
-            $stmt->execute([$event_id, $barangay_id]);
-            
-            // Get updated event data
-            $stmt = $pdo->prepare("SELECT * FROM events WHERE event_id = ?");
-            $stmt->execute([$event_id]);
-            $event = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            // Send notifications
-            if ($event) {
-                sendEventEmails($pdo, $event, $barangay_id, 'postponed');
-                logAuditTrail($pdo, $_SESSION['user_id'], 'UPDATE', 'Events', $event_id, "Event postponed");
-            }
-            
-            $_SESSION['message'] = "Event postponed successfully. Residents have been notified.";
-        } else {
-            // Validate required fields
-            $errors = [];
-            if (empty($title)) $errors[] = 'Title is required';
-            if (empty($start_datetime)) $errors[] = 'Start date/time is required';
-            if (empty($end_datetime)) $errors[] = 'End date/time is required';
-            if (empty($location)) $errors[] = 'Location is required';
-            
-            // Validate datetime logic
-            if (strtotime($end_datetime) < strtotime($start_datetime)) {
-                $errors[] = 'End time must be after start time';
-            }
+    $errors = [];
 
-            if (!empty($errors)) {
-                $_SESSION['message'] = implode('<br>', $errors);
-            } else {
-                if ($event_id) {
-                    // Update existing event
-                    $stmt = $pdo->prepare(
-                        "UPDATE Events SET
-                            title = ?, description = ?, start_datetime = ?,
-                            end_datetime = ?, location = ?, organizer = ?
-                         WHERE event_id = ? AND barangay_id = ?"
-                    );
-                    $stmt->execute([
-                        $title, $description, $start_datetime,
-                        $end_datetime, $location, $organizer,
-                        $event_id, $barangay_id
-                    ]);
-                    logAuditTrail($pdo, $_SESSION['user_id'], 'UPDATE', 'Events', $event_id, "Event updated");
-                    $_SESSION['message'] = "Event updated successfully.";
-                } else {
-                    // Create new event
-                    $stmt = $pdo->prepare(
-                        "INSERT INTO Events (
-                            title, description, start_datetime, end_datetime,
-                            location, organizer, barangay_id, created_by
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                    );
-                    $stmt->execute([
-                        $title, $description, $start_datetime,
-                        $end_datetime, $location, $organizer,
-                        $barangay_id, $created_by
-                    ]);
-                    $newId = $pdo->lastInsertId();
-                    
-                    // Get new event data
-                    $stmt = $pdo->prepare("SELECT * FROM events WHERE event_id = ?");
-                    $stmt->execute([$newId]);
-                    $event = $stmt->fetch(PDO::FETCH_ASSOC);
-                    
-                    // Send notifications
-                    if ($event) {
-                        sendEventEmails($pdo, $event, $barangay_id, 'new');
-                        logAuditTrail($pdo, $_SESSION['user_id'], 'INSERT', 'Events', $newId, "Event created");
-                    }
-                    
-                    $_SESSION['message'] = "Event created successfully. Residents have been notified.";
-                }
-            }
-        }
-    } catch (PDOException $e) {
-        error_log("Database Error: " . $e->getMessage());
-        $_SESSION['message'] = "An error occurred while processing your request.";
+    // 2) Required fields
+    if ($title === '')    $errors[] = 'Title is required';
+    if ($startRaw === '') $errors[] = 'Start date/time is required';
+    if ($endRaw === '')   $errors[] = 'End date/time is required';
+    if ($location === '') $errors[] = 'Location is required';
+
+    // 3) Length limits
+    if (strlen($title) > 100)      $errors[] = 'Title cannot exceed 100 characters';
+    if (strlen($location) > 150)   $errors[] = 'Location cannot exceed 150 characters';
+    if ($organizer !== '' && strlen($organizer) > 100) {
+        $errors[] = 'Organizer cannot exceed 100 characters';
     }
 
-    // Redirect to prevent resubmission
+    // 4) Parse datetimes from datetime-local ("YYYY-MM-DDTHH:MM")
+    $startDT = DateTime::createFromFormat('Y-m-d\TH:i', $startRaw);
+    $endDT   = DateTime::createFromFormat('Y-m-d\TH:i', $endRaw);
+
+    if (! $startDT) $errors[] = 'Invalid start date/time format';
+    if (! $endDT)   $errors[] = 'Invalid end date/time format';
+
+    // 5) No past events
+    $now = new DateTime('now');
+    if ($startDT && $startDT < $now) {
+        $errors[] = 'Start time must be in the future';
+    }
+
+    // 6) Chronological order
+    if ($startDT && $endDT && $endDT <= $startDT) {
+        $errors[] = 'End time must be after start time';
+    }
+
+    if (! empty($errors)) {
+        $_SESSION['message'] = implode('<br>', $errors);
+    } else {
+        // 7) Format for MySQL DATETIME
+        $start_datetime = $startDT->format('Y-m-d H:i:s');
+        $end_datetime   = $endDT  ->format('Y-m-d H:i:s');
+
+        // 8) Overlap check (no double-booking in same barangay)
+        $sql  = "SELECT COUNT(*) FROM events 
+                 WHERE barangay_id = ? 
+                   AND (? < end_datetime AND start_datetime < ?)";
+        $params = [$barangay_id, $start_datetime, $end_datetime];
+
+        if ($event_id) {
+            $sql .= " AND event_id != ?";
+            $params[] = $event_id;
+        }
+
+        $stmtOverlap = $pdo->prepare($sql);
+        $stmtOverlap->execute($params);
+
+        if ($stmtOverlap->fetchColumn() > 0) {
+            $_SESSION['message'] = 'This event overlaps with an existing event in your barangay.';
+            header("Location: " . $_SERVER['PHP_SELF']);
+            exit;
+        }
+
+        // 9) Database operations
+        try {
+            if (isset($_POST['delete']) && $event_id) {
+                // postpone
+                $stmt = $pdo->prepare(
+                    "UPDATE events 
+                     SET status = 'postponed'
+                     WHERE event_id = ? AND barangay_id = ?"
+                );
+                $stmt->execute([$event_id, $barangay_id]);
+
+                $stmt = $pdo->prepare("SELECT * FROM events WHERE event_id = ?");
+                $stmt->execute([$event_id]);
+                $event = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($event) {
+                    sendEventEmails($pdo, $event, $barangay_id, 'postponed');
+                    logAuditTrail($pdo, $_SESSION['user_id'], 'UPDATE', 'Events', $event_id, "Event postponed");
+                }
+
+                $_SESSION['message'] = "Event postponed successfully. Residents have been notified.";
+            }
+            elseif ($event_id) {
+                // update
+                $stmt = $pdo->prepare(
+                    "UPDATE events SET
+                        title = ?, description = ?, start_datetime = ?,
+                        end_datetime = ?, location = ?, organizer = ?
+                     WHERE event_id = ? AND barangay_id = ?"
+                );
+                $stmt->execute([
+                    $title, $description, $start_datetime,
+                    $end_datetime, $location, $organizer,
+                    $event_id, $barangay_id
+                ]);
+                logAuditTrail($pdo, $_SESSION['user_id'], 'UPDATE', 'Events', $event_id, "Event updated");
+                $_SESSION['message'] = "Event updated successfully.";
+            }
+            else {
+                // insert
+                $stmt = $pdo->prepare(
+                    "INSERT INTO events (
+                        title, description, start_datetime, end_datetime,
+                        location, organizer, barangay_id, created_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                );
+                $stmt->execute([
+                    $title, $description, $start_datetime,
+                    $end_datetime, $location, $organizer,
+                    $barangay_id, $_SESSION['user_id']
+                ]);
+                $newId = $pdo->lastInsertId();
+
+                $stmt = $pdo->prepare("SELECT * FROM events WHERE event_id = ?");
+                $stmt->execute([$newId]);
+                $event = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($event) {
+                    sendEventEmails($pdo, $event, $barangay_id, 'new');
+                    logAuditTrail($pdo, $_SESSION['user_id'], 'INSERT', 'Events', $newId, "Event created");
+                }
+
+                $_SESSION['message'] = "Event created successfully. Residents have been notified.";
+            }
+        } catch (PDOException $e) {
+            error_log("Database Error: " . $e->getMessage());
+            $_SESSION['message'] = "An error occurred while processing your request.";
+        }
+    }
+
+    // 10) Redirect to avoid resubmission
     header("Location: " . $_SERVER['PHP_SELF']);
     exit;
 }
