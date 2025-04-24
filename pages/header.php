@@ -1,21 +1,57 @@
 <?php
-// pages/header.php
+// header.php
+
+require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/../config/dbconn.php'; // defines $pdo
+
+// ── Session & Authentication Guard ───────────────────────────────
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
+if (empty($_SESSION['user_id'])) {
+    header('Location: ../pages/index.php');
+    exit;
+}
 
-require __DIR__ . '/../config/dbconn.php';
+// ── Load User Info from DB ────────────────────────────────────────
+$userId = (int) $_SESSION['user_id'];
+$stmt = $pdo->prepare('
+    SELECT role_id, barangay_id
+      FROM Users
+     WHERE user_id = ?
+    LIMIT 1
+');
+$stmt->execute([$userId]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-$bid = $_SESSION['barangay_id'] ?? null;
-if ($bid) {
-    $stmt = $pdo->prepare("SELECT barangay_name FROM Barangay WHERE barangay_id = :bid");
-    $stmt->execute([':bid' => $bid]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $barangayName = $row['barangay_name'] ?? 'Unknown Barangay';
+if (!$user) {
+    // Invalid session: user no longer exists
+    session_destroy();
+    header('Location: ../pages/index.php');
+    exit;
+}
+
+// ── Store in Session ──────────────────────────────────────────────
+$_SESSION['role_id']     = (int) $user['role_id'];
+$_SESSION['barangay_id'] = (int) $user['barangay_id'];
+
+// ── Lookup Barangay Name for Official Roles ───────────────────────
+$officialRoles = [3,4,5,6,7]; // e.g. Captain, Secretary, Treasurer, etc.
+if (in_array($_SESSION['role_id'], $officialRoles, true)) {
+    $stmt2 = $pdo->prepare('
+        SELECT barangay_name
+          FROM Barangay
+         WHERE barangay_id = ?
+        LIMIT 1
+    ');
+    $stmt2->execute([$_SESSION['barangay_id']]);
+    $bName = $stmt2->fetchColumn();
+    $_SESSION['barangay_name'] = $bName ?: 'Barangay Hub';
 } else {
-    $barangayName = 'Undefined Barangay';
+    unset($_SESSION['barangay_name']);
 }
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -94,7 +130,9 @@ if ($bid) {
   <!-- Sidebar Navigation -->
   <aside class="fixed left-0 top-0 h-screen w-64 bg-white border-r border-gray-200 p-4 shadow-md">
     <div class="mb-8 px-2">
-      <h2 class="text-2xl font-bold text-blue-800"><?= htmlspecialchars($barangayName) ?></h2>
+    <h2 class="text-2xl font-bold text-blue-800">
+  <?= htmlspecialchars($_SESSION['barangay_name'] ?? 'Barangay Hub') ?>
+</h2>
       <p class="text-sm text-gray-600">Administration System</p>
     </div>
     <nav aria-label="Main Navigation">

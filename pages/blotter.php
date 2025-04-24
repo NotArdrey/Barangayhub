@@ -224,7 +224,7 @@ if (!empty($_GET['action'])) {
     $id     = intval($_GET['id'] ?? 0);
 
     if (in_array($action, ['delete','complete','set_status','add_intervention','update_case'], true)
-        && !in_array($role, [1,2,3], true)) {
+        && !in_array($role, [3, 4, 5], true)) {
         echo json_encode(['success'=>false,'message'=>'Permission denied']);
         exit;
     }

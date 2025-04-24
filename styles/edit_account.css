@@ -278,9 +278,9 @@ body {
   text-align: center;
   margin-bottom: 3rem;
   padding: 2rem;
-  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+  background: linear-gradient(135deg, var(--primary-blue), var(--secondary-blue));
   border-radius: 1rem;
-  color: white;
+  color: rgb(0, 0, 0);
   box-shadow: 0 4px 20px rgba(26,106,155,0.15);
 }
 
@@ -421,7 +421,7 @@ body {
 }
 
 .cta-button {
-  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+  background: linear-gradient(135deg, var(--primary-blue), var(--secondary-blue));
   color: rgb(0, 0, 0);
   border: none;
   position: relative;

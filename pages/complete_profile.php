@@ -6,23 +6,26 @@ require "../config/dbconn.php"; // Assumes this file creates a PDO instance as $
  * Returns the appropriate dashboard URL based on the user's role.
  */
 function getDashboardUrl($role_id) {
-  if ($role_id == 1) {
-      return "../pages/programmer_admin.php"; 
-  } elseif ($role_id == 2) {
-      return "../pages/super_admin_dashboard.php";
-  } elseif ($role_id == 3) {
-      return "../pages/barangay_admin_dashboard.php";
-  } elseif ($role_id == 4) {
-      return "../pages/barangay_admin_dashboard.php";
-  } elseif ($role_id == 5) {
-      return "../pages/barangay_admin_dashboard.php";
-  } else {
-      return "../pages/user_dashboard.php";
-  }
+    switch ($role_id) {
+        case 1:
+            return "../pages/programmer_admin.php";
+        case 2:
+            return "../pages/super_admin_dashboard.php";
+        // Roles 3–7 are barangay admins
+        case 3:
+        case 4:
+        case 5:
+        case 6:
+        case 7:
+            return "../pages/barangay_admin_dashboard.php";
+        // Role 8 (and any other) is a regular user/resident
+        default:
+            return "../pages/user_dashboard.php";
+    }
 }
 
 // Only allow logged-in users; if not, redirect to login page.
-if (!isset($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'], $_SESSION['role_id'])) {
     header("Location: ../pages/index.php");
     exit;
 }
@@ -35,171 +38,153 @@ $stmt = $pdo->prepare($query);
 $stmt->execute([$user_id]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
+// Fetch current address data if it exists
+$addressQuery = "SELECT * FROM Address WHERE user_id = ?";
+$stmtAddress = $pdo->prepare($addressQuery);
+$stmtAddress->execute([$user_id]);
+$address = $stmtAddress->fetch(PDO::FETCH_ASSOC);
+
 $error_message = '';
+$formData = [];
 
 // Process form submission on POST.
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Collect and trim form inputs
+    $formData = [
+        'first_name'               => trim($_POST['first_name'] ?? ''),
+        'middle_name'              => trim($_POST['middle_name'] ?? ''),
+        'last_name'                => trim($_POST['last_name'] ?? ''),
+        'birth_date'               => trim($_POST['birth_date'] ?? ''),
+        'gender'                   => trim($_POST['gender'] ?? ''),
+        'contact_number'           => trim($_POST['contact_number'] ?? ''),
+        'marital_status'           => trim($_POST['marital_status'] ?? ''),
+        'emergency_contact_name'   => trim($_POST['emergency_contact_name'] ?? ''),
+        'emergency_contact_number' => trim($_POST['emergency_contact_number'] ?? ''),
+        'emergency_contact_address'=> trim($_POST['emergency_contact_address'] ?? ''),
+        'barangay_id'              => trim($_POST['barangay_id'] ?? ''),
+        'residency_type'           => trim($_POST['residency_type'] ?? ''),
+        'years_in_san_rafael'      => trim($_POST['years_in_san_rafael'] ?? ''),
+        'block_lot'                => trim($_POST['block_lot'] ?? ''),
+        'phase'                    => trim($_POST['phase'] ?? ''),
+        'street'                   => trim($_POST['street'] ?? ''),
+        'subdivision'              => trim($_POST['subdivision'] ?? ''),
+    ];
 
-    // Retrieve and trim text fields from the form.
-    $first_name                = trim($_POST['first_name']);
-    $middle_name               = trim($_POST['middle_name']);
-    $last_name                 = trim($_POST['last_name']);
-    $birth_date                = trim($_POST['birth_date']);
-    $gender                    = trim($_POST['gender']);
-    $contact_number            = trim($_POST['contact_number']);
-    $marital_status            = trim($_POST['marital_status']);
-    $emergency_contact_name    = trim($_POST['emergency_contact_name']);
-    $emergency_contact_number  = trim($_POST['emergency_contact_number']);
-    $emergency_contact_address = trim($_POST['emergency_contact_address']);
-    $barangay_id               = trim($_POST['barangay_id']);
-
-    // Retrieve new Address fields.
-    $residency_type      = trim($_POST['residency_type']);
-    $years_in_san_rafael = trim($_POST['years_in_san_rafael']);
-    $block_lot           = trim($_POST['block_lot']);
-    $phase               = trim($_POST['phase']);
-    $street              = trim($_POST['street']);
-    $subdivision         = trim($_POST['subdivision']);
-
-    // Validate required fields.
+    // Validate required fields
     $errors = [];
-
-    if (empty($first_name)) { 
-        $errors[] = "First name is required."; 
+    if (empty($formData['first_name'])) {
+        $errors[] = "First name is required.";
     }
-    if (empty($last_name)) { 
-        $errors[] = "Last name is required."; 
+    if (empty($formData['last_name'])) {
+        $errors[] = "Last name is required.";
     }
-    if (empty($birth_date)) { 
-        $errors[] = "Birth date is required."; 
+    if (empty($formData['birth_date'])) {
+        $errors[] = "Birth date is required.";
     } else {
-        $date_obj = DateTime::createFromFormat('Y-m-d', $birth_date);
-        if (!$date_obj || $date_obj->format('Y-m-d') !== $birth_date) {
+        $d = DateTime::createFromFormat('Y-m-d', $formData['birth_date']);
+        if (!$d || $d->format('Y-m-d') !== $formData['birth_date']) {
             $errors[] = "Invalid birth date format.";
+        } elseif ($d > new DateTime('today')) {
+            $errors[] = "Birth date cannot be in the future.";
         }
     }
-    if (empty($gender)) { 
-        $errors[] = "Gender is required."; 
+    if (empty($formData['gender'])) {
+        $errors[] = "Gender is required.";
     }
-    if (empty($contact_number)) { 
-        $errors[] = "Contact number is required."; 
-    } elseif (!preg_match('/^\+?[0-9]{7,15}$/', $contact_number)) {
-         $errors[] = "Invalid contact number format.";
+    if (empty($formData['contact_number']) || !preg_match('/^\+?[0-9]{7,15}$/', $formData['contact_number'])) {
+        $errors[] = "Valid contact number is required.";
     }
-    if (empty($barangay_id) || !ctype_digit($barangay_id)) { 
-        $errors[] = "A valid Barangay selection is required."; 
+    if (empty($formData['barangay_id']) || !ctype_digit($formData['barangay_id'])) {
+        $errors[] = "A valid Barangay selection is required.";
     }
-
-    // Validate required address fields.
-    if (empty($residency_type)) { 
-        $errors[] = "Residency type is required."; 
+    if (empty($formData['residency_type'])) {
+        $errors[] = "Residency type is required.";
     }
-    if (empty($years_in_san_rafael) || !ctype_digit($years_in_san_rafael)) { 
-        $errors[] = "Years in San Rafael is required and must be a non-negative number."; 
+    if ($formData['years_in_san_rafael'] === '' || !ctype_digit($formData['years_in_san_rafael'])) {
+        $errors[] = "Years in San Rafael is required and must be a number.";
     }
-    if (empty($block_lot)) { 
-        $errors[] = "Block/Lot is required."; 
-    }
-    if (empty($phase)) { 
-        $errors[] = "Phase is required."; 
-    }
-    if (empty($street)) { 
-        $errors[] = "Street is required."; 
-    }
-    if (empty($subdivision)) { 
-        $errors[] = "Subdivision is required."; 
+    foreach (['block_lot','phase','street','subdivision'] as $fld) {
+        if (empty($formData[$fld])) {
+            $errors[] = ucfirst(str_replace('_',' ',$fld)) . " is required.";
+        }
     }
 
-    // If there are no errors, update the user's profile.
     if (empty($errors)) {
-        // Update Users table.
-        $updateQuery = "UPDATE Users SET 
-                            first_name = ?, 
-                            middle_name = ?, 
-                            last_name = ?, 
-                            birth_date = ?, 
-                            gender = ?, 
-                            contact_number = ?, 
-                            marital_status = ?, 
-                            emergency_contact_name = ?, 
-                            emergency_contact_number = ?, 
-                            emergency_contact_address = ?, 
-                            barangay_id = ?
-                        WHERE user_id = ?";
-        $updateStmt = $pdo->prepare($updateQuery);
+        // Update Users
+        $sql = "UPDATE Users SET
+                    first_name=?, middle_name=?, last_name=?, birth_date=?,
+                    gender=?, contact_number=?, marital_status=?,
+                    emergency_contact_name=?, emergency_contact_number=?,
+                    emergency_contact_address=?, barangay_id=?
+                  WHERE user_id=?";
+        $stmtUpd = $pdo->prepare($sql);
         $params = [
-            $first_name,
-            $middle_name,
-            $last_name,
-            $birth_date,
-            $gender,
-            $contact_number,
-            $marital_status,
-            $emergency_contact_name,
-            $emergency_contact_number,
-            $emergency_contact_address,
-            $barangay_id,
+            $formData['first_name'],
+            $formData['middle_name'],
+            $formData['last_name'],
+            $formData['birth_date'],
+            $formData['gender'],
+            $formData['contact_number'],
+            $formData['marital_status'],
+            $formData['emergency_contact_name'],
+            $formData['emergency_contact_number'],
+            $formData['emergency_contact_address'],
+            $formData['barangay_id'],
             $user_id
         ];
-        $userUpdateSuccess = $updateStmt->execute($params);
+        $okUser = $stmtUpd->execute($params);
 
-        // Update the Address table.
-        $addressQuery = "SELECT * FROM Address WHERE user_id = ?";
-        $stmtAddress = $pdo->prepare($addressQuery);
-        $stmtAddress->execute([$user_id]);
-        $address = $stmtAddress->fetch(PDO::FETCH_ASSOC);
-
-        if ($address) {
-            // Update existing address.
-            $updateAddressQuery = "UPDATE Address SET 
-                                        residency_type = ?, 
-                                        years_in_san_rafael = ?, 
-                                        block_lot = ?, 
-                                        phase = ?, 
-                                        street = ?, 
-                                        subdivision = ?, 
-                                        barangay_id = ?
-                                    WHERE user_id = ?";
-            $stmtUpdateAddress = $pdo->prepare($updateAddressQuery);
-            $addressParams = [
-                $residency_type,
-                $years_in_san_rafael,
-                $block_lot,
-                $phase,
-                $street,
-                $subdivision,
-                $barangay_id,
+        // Upsert Address
+        $exists = $pdo->prepare("SELECT COUNT(*) FROM Address WHERE user_id=?");
+        $exists->execute([$user_id]);
+        if ($exists->fetchColumn()) {
+            $sqlAddr = "UPDATE Address SET
+                            residency_type=?, years_in_san_rafael=?,
+                            block_lot=?, phase=?, street=?, subdivision=?, barangay_id=?
+                        WHERE user_id=?";
+            $stmtAddr = $pdo->prepare($sqlAddr);
+            $addrParams = [
+                $formData['residency_type'],
+                $formData['years_in_san_rafael'],
+                $formData['block_lot'],
+                $formData['phase'],
+                $formData['street'],
+                $formData['subdivision'],
+                $formData['barangay_id'],
                 $user_id
             ];
-            $addressUpdateSuccess = $stmtUpdateAddress->execute($addressParams);
+            $okAddr = $stmtAddr->execute($addrParams);
         } else {
-            // Insert new address record.
-            $insertAddressQuery = "INSERT INTO Address (
-                                        user_id, residency_type, years_in_san_rafael, block_lot, phase, street, subdivision, barangay_id
-                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-            $stmtInsertAddress = $pdo->prepare($insertAddressQuery);
-            $addressParams = [
+            $sqlAddr = "INSERT INTO Address (
+                            user_id,residency_type,years_in_san_rafael,
+                            block_lot,phase,street,subdivision,barangay_id
+                        ) VALUES (?,?,?,?,?,?,?,?)";
+            $stmtAddr = $pdo->prepare($sqlAddr);
+            $addrParams = [
                 $user_id,
-                $residency_type,
-                $years_in_san_rafael,
-                $block_lot,
-                $phase,
-                $street,
-                $subdivision,
-                $barangay_id
+                $formData['residency_type'],
+                $formData['years_in_san_rafael'],
+                $formData['block_lot'],
+                $formData['phase'],
+                $formData['street'],
+                $formData['subdivision'],
+                $formData['barangay_id'],
             ];
-            $addressUpdateSuccess = $stmtInsertAddress->execute($addressParams);
+            $okAddr = $stmtAddr->execute($addrParams);
         }
 
-        if ($userUpdateSuccess && $addressUpdateSuccess) {
-            header("Location: ../pages/user_dashboard.php");
+        if ($okUser && $okAddr) {
+            // Redirect to role-based dashboard
+            header("Location: " . getDashboardUrl($_SESSION['role_id']));
             exit;
-        } else {
-            $error_message = "Failed to update profile and/or address. Please try again.";
         }
+        $error_message = "Failed to update profile. Please try again.";
     } else {
         $error_message = implode("<br>", $errors);
     }
+} else {
+    // Pre-fill form with existing data
+    $formData = array_merge($user, $address ?: []);
 }
 ?>
 <!DOCTYPE html>
@@ -212,80 +197,82 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
   <!-- SweetAlert2 for notifications -->
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  
 </head>
 <body>
 
   <!-- Main Content -->
   <main class="edit-account-section">
-    <div class="section-header">
+    <div class="section-header ">
       <h2>Complete Your Profile</h2>
       <p>Please fill in the required details to continue.</p>
     </div>
 
     <?php if (!empty($error_message)): ?>
       <script>
-        Swal.fire({
-          icon: "error",
-          title: "Error",
-          html: <?php echo json_encode($error_message); ?>
+        document.addEventListener('DOMContentLoaded', function() {
+          Swal.fire({
+            icon: "error",
+            title: "Error",
+            html: <?php echo json_encode($error_message); ?>
+          });
         });
       </script>
     <?php endif; ?>
 
     <div class="account-form-container">
-      <!-- IMPORTANT: The form's enctype only needs to support text data now -->
       <form class="account-form" action="" method="POST" id="profileForm">
         <!-- Personal Details Fields -->
         <div class="form-group">
           <label for="first_name">First Name *</label>
-          <input type="text" id="first_name" name="first_name" value="<?php echo htmlspecialchars($user['first_name'] ?? ''); ?>" required>
+          <input type="text" id="first_name" name="first_name" value="<?php echo htmlspecialchars($formData['first_name'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="middle_name">Middle Name</label>
-          <input type="text" id="middle_name" name="middle_name" value="<?php echo htmlspecialchars($user['middle_name'] ?? ''); ?>">
+          <input type="text" id="middle_name" name="middle_name" value="<?php echo htmlspecialchars($formData['middle_name'] ?? ''); ?>">
         </div>
         <div class="form-group">
           <label for="last_name">Last Name *</label>
-          <input type="text" id="last_name" name="last_name" value="<?php echo htmlspecialchars($user['last_name'] ?? ''); ?>" required>
+          <input type="text" id="last_name" name="last_name" value="<?php echo htmlspecialchars($formData['last_name'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="birth_date">Birth Date *</label>
-          <input type="date" id="birth_date" name="birth_date" value="<?php echo htmlspecialchars($user['birth_date'] ?? ''); ?>" required>
+          <input type="date" id="birth_date" name="birth_date" value="<?php echo htmlspecialchars($formData['birth_date'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="gender">Gender *</label>
           <select name="gender" id="gender" required>
             <option value="">Select Gender</option>
-            <option value="Male" <?php echo (isset($user['gender']) && $user['gender'] === "Male") ? 'selected' : ''; ?>>Male</option>
-            <option value="Female" <?php echo (isset($user['gender']) && $user['gender'] === "Female") ? 'selected' : ''; ?>>Female</option>
-            <option value="Others" <?php echo (isset($user['gender']) && $user['gender'] === "Others") ? 'selected' : ''; ?>>Others</option>
+            <option value="Male" <?php echo (isset($formData['gender']) && $formData['gender'] === "Male") ? 'selected' : ''; ?>>Male</option>
+            <option value="Female" <?php echo (isset($formData['gender']) && $formData['gender'] === "Female") ? 'selected' : ''; ?>>Female</option>
+            <option value="Others" <?php echo (isset($formData['gender']) && $formData['gender'] === "Others") ? 'selected' : ''; ?>>Others</option>
           </select>
         </div>
         <div class="form-group">
           <label for="contact_number">Contact Number *</label>
-          <input type="text" id="contact_number" name="contact_number" value="<?php echo htmlspecialchars($user['contact_number'] ?? ''); ?>" required>
+          <input type="text" id="contact_number" name="contact_number" value="<?php echo htmlspecialchars($formData['contact_number'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="marital_status">Marital Status</label>
           <select name="marital_status" id="marital_status">
             <option value="">Select Status</option>
-            <option value="Single" <?php echo (isset($user['marital_status']) && $user['marital_status'] === "Single") ? 'selected' : ''; ?>>Single</option>
-            <option value="Married" <?php echo (isset($user['marital_status']) && $user['marital_status'] === "Married") ? 'selected' : ''; ?>>Married</option>
-            <option value="Widowed" <?php echo (isset($user['marital_status']) && $user['marital_status'] === "Widowed") ? 'selected' : ''; ?>>Widowed</option>
-            <option value="Separated" <?php echo (isset($user['marital_status']) && $user['marital_status'] === "Separated") ? 'selected' : ''; ?>>Separated</option>
+            <option value="Single" <?php echo (isset($formData['marital_status']) && $formData['marital_status'] === "Single") ? 'selected' : ''; ?>>Single</option>
+            <option value="Married" <?php echo (isset($formData['marital_status']) && $formData['marital_status'] === "Married") ? 'selected' : ''; ?>>Married</option>
+            <option value="Widowed" <?php echo (isset($formData['marital_status']) && $formData['marital_status'] === "Widowed") ? 'selected' : ''; ?>>Widowed</option>
+            <option value="Separated" <?php echo (isset($formData['marital_status']) && $formData['marital_status'] === "Separated") ? 'selected' : ''; ?>>Separated</option>
           </select>
         </div>
         <div class="form-group">
           <label for="emergency_contact_name">Emergency Contact Name</label>
-          <input type="text" id="emergency_contact_name" name="emergency_contact_name" value="<?php echo htmlspecialchars($user['emergency_contact_name'] ?? ''); ?>">
+          <input type="text" id="emergency_contact_name" name="emergency_contact_name" value="<?php echo htmlspecialchars($formData['emergency_contact_name'] ?? ''); ?>">
         </div>
         <div class="form-group">
           <label for="emergency_contact_number">Emergency Contact Number</label>
-          <input type="text" id="emergency_contact_number" name="emergency_contact_number" value="<?php echo htmlspecialchars($user['emergency_contact_number'] ?? ''); ?>">
+          <input type="text" id="emergency_contact_number" name="emergency_contact_number" value="<?php echo htmlspecialchars($formData['emergency_contact_number'] ?? ''); ?>">
         </div>
         <div class="form-group">
           <label for="emergency_contact_address">Emergency Contact Address</label>
-          <input type="text" id="emergency_contact_address" name="emergency_contact_address" value="<?php echo htmlspecialchars($user['emergency_contact_address'] ?? ''); ?>">
+          <input type="text" id="emergency_contact_address" name="emergency_contact_address" value="<?php echo htmlspecialchars($formData['emergency_contact_address'] ?? ''); ?>">
         </div>
         <div class="form-group">
           <label for="barangay_id">Barangay</label>
@@ -295,7 +282,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               $barangayQuery = "SELECT barangay_id, barangay_name FROM Barangay";
               $stmtBarangay = $pdo->query($barangayQuery);
               while ($barangay = $stmtBarangay->fetch(PDO::FETCH_ASSOC)) {
-                  $selected = (isset($user['barangay_id']) && $user['barangay_id'] == $barangay['barangay_id']) ? 'selected' : '';
+                  $selected = (isset($formData['barangay_id']) && $formData['barangay_id'] == $barangay['barangay_id']) ? 'selected' : '';
                   echo "<option value=\"{$barangay['barangay_id']}\" $selected>{$barangay['barangay_name']}</option>";
               }
             ?>
@@ -308,31 +295,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <label for="residency_type">Residency Type *</label>
           <select name="residency_type" id="residency_type" required>
             <option value="">Select Residency Type</option>
-            <option value="Home Owner">Home Owner</option>
-            <option value="Renter">Renter</option>
-            <option value="Boarder">Boarder</option>
-            <option value="Living-In">Living-In</option>
+            <option value="Home Owner" <?php echo (isset($formData['residency_type']) && $formData['residency_type'] === "Home Owner") ? 'selected' : ''; ?>>Home Owner</option>
+            <option value="Renter" <?php echo (isset($formData['residency_type']) && $formData['residency_type'] === "Renter") ? 'selected' : ''; ?>>Renter</option>
+            <option value="Boarder" <?php echo (isset($formData['residency_type']) && $formData['residency_type'] === "Boarder") ? 'selected' : ''; ?>>Boarder</option>
+            <option value="Living-In" <?php echo (isset($formData['residency_type']) && $formData['residency_type'] === "Living-In") ? 'selected' : ''; ?>>Living-In</option>
           </select>
         </div>
         <div class="form-group">
           <label for="years_in_san_rafael">Years in San Rafael *</label>
-          <input type="number" id="years_in_san_rafael" name="years_in_san_rafael" min="0" required>
+          <input type="number" id="years_in_san_rafael" name="years_in_san_rafael" min="0" value="<?php echo htmlspecialchars($formData['years_in_san_rafael'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="block_lot">Block/Lot *</label>
-          <input type="text" id="block_lot" name="block_lot" required>
+          <input type="text" id="block_lot" name="block_lot" value="<?php echo htmlspecialchars($formData['block_lot'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="phase">Phase *</label>
-          <input type="text" id="phase" name="phase" required>
+          <input type="text" id="phase" name="phase" value="<?php echo htmlspecialchars($formData['phase'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="street">Street *</label>
-          <input type="text" id="street" name="street" required>
+          <input type="text" id="street" name="street" value="<?php echo htmlspecialchars($formData['street'] ?? ''); ?>" required>
         </div>
         <div class="form-group">
           <label for="subdivision">Subdivision *</label>
-          <input type="text" id="subdivision" name="subdivision" required>
+          <input type="text" id="subdivision" name="subdivision" value="<?php echo htmlspecialchars($formData['subdivision'] ?? ''); ?>" required>
         </div>
 
         <!-- Form Actions -->

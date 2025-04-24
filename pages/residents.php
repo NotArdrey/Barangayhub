@@ -1,19 +1,25 @@
 <?php
 session_start();
-require "../vendor/autoload.php";
-require "../config/dbconn.php";
+require __DIR__ . "/../vendor/autoload.php";
+require __DIR__ . "/../config/dbconn.php";
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role_id'] < 2) {
+// Cast session values to integers for strict comparison
+$current_admin_id = isset($_SESSION['user_id'])       ? (int) $_SESSION['user_id']       : null;
+$role             = isset($_SESSION['role_id'])       ? (int) $_SESSION['role_id']       : null;
+$bid              = isset($_SESSION['barangay_id'])   ? (int) $_SESSION['barangay_id']   : null;
+
+define('ROLE_RESIDENT', 8);
+
+// Access control: only Super Admin (2) and Barangay-specific Admins (3–7) can view
+if ($current_admin_id === null || !in_array($role, [2,3,4,5,6,7], true)) {
     header("Location: ../pages/index.php");
     exit;
 }
 
-$current_admin_id = $_SESSION['user_id'];
-$bid = $_SESSION['barangay_id'];
-$role = $_SESSION['role_id'];
-define('ROLE_RESIDENT', 3);
-
-function logAuditTrail($pdo, $admin, $action, $table, $id, $desc) {
+/**
+ * Audit trail logger
+ */
+function logAuditTrail(PDO $pdo, int $admin, string $action, string $table, int $id, string $desc): void {
     $stmt = $pdo->prepare(
         "INSERT INTO AuditTrail (admin_user_id, action, table_name, record_id, description)
          VALUES (:admin, :act, :tbl, :rid, :desc)"
@@ -23,94 +29,96 @@ function logAuditTrail($pdo, $admin, $action, $table, $id, $desc) {
         ':act'   => $action,
         ':tbl'   => $table,
         ':rid'   => $id,
-        ':desc'  => $desc
+        ':desc'  => $desc,
     ]);
 }
-$query = "SELECT u.*, a.street AS home_address 
-          FROM Users u
-          LEFT JOIN Address a ON u.user_id = a.user_id
-          WHERE u.role_id = :role";
+
+// Build query to fetch residents (role_id = ROLE_RESIDENT)
+$sql = <<<SQL
+SELECT u.*, a.street AS home_address
+  FROM Users u
+  LEFT JOIN Address a ON u.user_id = a.user_id
+ WHERE u.role_id = :role
+SQL;
 $params = [':role' => ROLE_RESIDENT];
 
-// For barangay admins (role 2), filter by their barangay
-if ($role === 2) {
-    $query .= " AND u.barangay_id = :bid";
+// If current user is a Barangay Admin (3–7), filter to their barangay
+if ($role >= 3 && $role <= 7) {
+    $sql           .= " AND u.barangay_id = :bid";
     $params[':bid'] = $bid;
 }
 
 try {
-    $stmt = $pdo->prepare($query);
+    $stmt      = $pdo->prepare($sql);
     $stmt->execute($params);
     $residents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     die("Error fetching residents: " . $e->getMessage());
 }
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_resident_submit'])) {
-  $user_id = (int)$_POST['edit_person_id'];
-  $fields = [
-      'first_name', 'middle_name', 'last_name', 'email', 'birth_date',
-      'gender', 'contact_number', 'marital_status',
-      'emergency_contact_name', 'emergency_contact_number',
-      'emergency_contact_address'
-  ];
-  
-  $params = [':user_id' => $user_id];
-  $update = [];
-  
-  foreach ($fields as $f) {
-      $update[] = "$f = :$f";
-      $params[":$f"] = trim($_POST["edit_$f"] ?? '');
-  }
-  
-  try {
-      $pdo->beginTransaction();
-      
-      // Update Users table
-      $stmt = $pdo->prepare("UPDATE Users SET " . implode(',', $update) . " WHERE user_id = :user_id");
-      $stmt->execute($params);
-      
-      // Update/Insert Address table
-      $home_address = trim($_POST['edit_home_address'] ?? '');
-      
-      // First try to update
-      $check = $pdo->prepare("SELECT 1 FROM Address WHERE user_id = :user_id");
-      $check->execute([':user_id' => $user_id]);
 
-      if ($check->fetch()) {
-          // 2a) It exists → do your UPDATE
-          $upd = $pdo->prepare("
-              UPDATE Address
-                SET street = :street
-              WHERE user_id = :user_id
-          ");
-          $upd->execute([
-              ':street'  => $home_address,
-              ':user_id' => $user_id
-          ]);
-      } else {
-          // 2b) It doesn’t exist → INSERT
-          $ins = $pdo->prepare("
-              INSERT INTO Address (user_id, street)
-              VALUES (:user_id, :street)
-          ");
-          $ins->execute([
-              ':user_id' => $user_id,
-              ':street'  => $home_address
-          ]);
-      }
-      logAuditTrail($pdo, $current_admin_id, 'UPDATE', 'Users', $user_id, "Updated resident ID $user_id");
-      $pdo->commit();
-      $_SESSION['success_message'] = 'Resident updated successfully.';
-  } catch (PDOException $e) {
-      $pdo->rollBack();
-      $_SESSION['error_message'] = 'Error: ' . $e->getMessage();
-  }
-  header('Location: residents.php');
-  exit;
+// Handle edit form submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_resident_submit'])) {
+    $user_id = (int) ($_POST['edit_person_id'] ?? 0);
+    $fields  = [
+        'first_name', 'middle_name', 'last_name', 'email', 'birth_date',
+        'gender', 'contact_number', 'marital_status',
+        'emergency_contact_name', 'emergency_contact_number',
+        'emergency_contact_address'
+    ];
+
+    $updateParts = [];
+    $params      = [':user_id' => $user_id];
+
+    foreach ($fields as $field) {
+        $updateParts[]        = "{$field} = :{$field}";
+        $params[":{$field}"] = trim($_POST["edit_{$field}"] ?? '');
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        // Update Users table
+        $updateSql = "UPDATE Users SET " . implode(', ', $updateParts) . " WHERE user_id = :user_id";
+        $stmt      = $pdo->prepare($updateSql);
+        $stmt->execute($params);
+
+        // Update or insert Address
+        $homeAddress = trim($_POST['edit_home_address'] ?? '');
+        $checkStmt   = $pdo->prepare("SELECT 1 FROM Address WHERE user_id = :user_id");
+        $checkStmt->execute([':user_id' => $user_id]);
+
+        if ($checkStmt->fetch()) {
+            $upd = $pdo->prepare("UPDATE Address SET street = :street WHERE user_id = :user_id");
+            $upd->execute([':street' => $homeAddress, ':user_id' => $user_id]);
+        } else {
+            $ins = $pdo->prepare("INSERT INTO Address (user_id, street) VALUES (:user_id, :street)");
+            $ins->execute([':user_id' => $user_id, ':street' => $homeAddress]);
+        }
+
+        // Log audit trail
+        logAuditTrail(
+            $pdo,
+            $current_admin_id,
+            'UPDATE',
+            'Users',
+            $user_id,
+            "Updated resident ID {$user_id}"
+        );
+
+        $pdo->commit();
+        $_SESSION['success_message'] = 'Resident updated successfully.';
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        $_SESSION['error_message'] = 'Error: ' . $e->getMessage();
+    }
+
+    header('Location: residents.php');
+    exit;
 }
 
-require_once "../pages/header.php";
+require_once __DIR__ . "/../pages/header.php";
 ?>
+
 
 <!DOCTYPE html>
 <html lang="en">

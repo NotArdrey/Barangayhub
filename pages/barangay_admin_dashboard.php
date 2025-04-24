@@ -2,7 +2,9 @@
 require_once "../config/dbconn.php";
 require_once "../pages/header.php";
 
+
 $barangay_id = $_SESSION['barangay_id'] ?? 1;
+
 
 // Fetch metrics
 $sql = "SELECT COUNT(*) AS total_residents FROM Users WHERE role_id = 3 AND barangay_id = :bid";
