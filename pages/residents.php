@@ -9,7 +9,7 @@ $role             = isset($_SESSION['role_id'])       ? (int) $_SESSION['role_id
 $bid              = isset($_SESSION['barangay_id'])   ? (int) $_SESSION['barangay_id']   : null;
 
 define('ROLE_RESIDENT', 8);
-
+$filter = $_GET['filter'] ?? 'active';
 // Access control: only Super Admin (2) and Barangay-specific Admins (3–7) can view
 if ($current_admin_id === null || !in_array($role, [2,3,4,5,6,7], true)) {
     header("Location: ../pages/index.php");
@@ -42,10 +42,131 @@ SELECT u.*, a.street AS home_address
 SQL;
 $params = [':role' => ROLE_RESIDENT];
 
-// If current user is a Barangay Admin (3–7), filter to their barangay
+// ─── Barangay scope (unchanged) ──────────────────────
 if ($role >= 3 && $role <= 7) {
     $sql           .= " AND u.barangay_id = :bid";
     $params[':bid'] = $bid;
+}
+if (isset($_GET['action'], $_GET['id'])) {
+    header('Content-Type: application/json');
+    $resId   = (int) $_GET['id'];
+    $act     = $_GET['action'];  // 'ban' or 'unban'
+
+    // Fetch user email and name
+    $stmtUser = $pdo->prepare("
+        SELECT email, CONCAT(first_name,' ', last_name) AS name
+          FROM Users
+         WHERE user_id = :id
+    ");
+    $stmtUser->execute([':id' => $resId]);
+    $userInfo = $stmtUser->fetch(PDO::FETCH_ASSOC);
+
+    if ($act === 'ban' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Grab the ban reason
+        $remarks = $_POST['remarks'] ?? '';
+
+        // Deactivate the user
+        $stmt = $pdo->prepare("
+            UPDATE Users
+               SET is_active = 'no'
+             WHERE user_id     = :id
+               AND barangay_id = :bid
+        ");
+        $success = $stmt->execute([':id' => $resId, ':bid' => $bid]);
+        if ($success) {
+            // Send ban email with reason
+            if (!empty($userInfo['email'])) {
+                try {
+                    $mail = new PHPMailer(true);
+                    $mail->isSMTP();
+                    $mail->Host       = 'smtp.gmail.com';
+                    $mail->SMTPAuth   = true;
+                    $mail->Username   = 'barangayhub2@gmail.com';
+                    $mail->Password   = 'eisy hpjz rdnt bwrp';
+                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mail->Port       = 587;
+                    $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+                    $mail->addAddress($userInfo['email'], $userInfo['name']);
+                    $mail->Subject = 'Your account has been suspended';
+                    $mail->Body    = "Hello {$userInfo['name']},\n\n"
+                                   . "Your account has been suspended for the following reason:\n"
+                                   . "{$remarks}\n\n"
+                                   . "If you believe this is a mistake, please contact your barangay administrator.";
+                    $mail->send();
+                } catch (Exception $e) {
+                    error_log('Mailer Error: ' . $mail->ErrorInfo);
+                }
+            }
+            // Log audit with remarks
+            logAuditTrail(
+                $pdo,
+                $current_admin_id,
+                'UPDATE',
+                'Users',
+                $resId,
+                'Banned resident: ' . $remarks
+            );
+            echo json_encode(['success' => true, 'message' => 'Resident banned and notified.']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Unable to ban resident.']);
+        }
+
+    } elseif ($act === 'unban') {
+        // Reactivate the user
+        $stmt = $pdo->prepare("
+            UPDATE Users
+               SET is_active = 'yes'
+             WHERE user_id     = :id
+               AND barangay_id = :bid
+        ");
+        $success = $stmt->execute([':id' => $resId, ':bid' => $bid]);
+        if ($success) {
+            // Send unban email
+            if (!empty($userInfo['email'])) {
+                try {
+                    $mail = new PHPMailer(true);
+                    $mail->isSMTP();
+                    $mail->Host       = 'smtp.gmail.com';
+                    $mail->SMTPAuth   = true;
+                    $mail->Username   = 'barangayhub2@gmail.com';
+                    $mail->Password   = 'eisy hpjz rdnt bwrp';
+                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mail->Port       = 587;
+                    $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+                    $mail->addAddress($userInfo['email'], $userInfo['name']);
+                    $mail->Subject = 'Your account has been reactivated';
+                    $mail->Body    = "Hello {$userInfo['name']},\n\n"
+                                   . "Your account has been reactivated.\n"
+                                   . "You can now log in and continue using the system.";
+                    $mail->send();
+                } catch (Exception $e) {
+                    error_log('Mailer Error: ' . $mail->ErrorInfo);
+                }
+            }
+            logAuditTrail(
+                $pdo,
+                $current_admin_id,
+                'UPDATE',
+                'Users',
+                $resId,
+                'Unbanned resident.'
+            );
+            echo json_encode(['success' => true, 'message' => 'Resident unbanned and notified.']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Unable to unban resident.']);
+        }
+
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Invalid action or method.']);
+    }
+    exit;
+}
+
+// ─── Active/banned filter ────────────────────────────
+if ($filter === 'active') {
+    $sql .= " AND u.is_active = 'yes'";
+} elseif ($filter === 'banned') {
+    $sql .= " AND u.is_active = 'no'";
 }
 
 try {
@@ -138,8 +259,16 @@ require_once __DIR__ . "/../pages/header.php";
         <?php endif; ?>
 
         <section class="mb-6">
-            <div class="flex justify-between items-center">
-                <h1 class="text-3xl font-bold text-blue-800">Residents Management</h1>
+  <div class="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+    <div class="flex items-center space-x-3">
+      <h1 class="text-3xl font-bold text-blue-800">Residents Management</h1>
+      <!-- Filter dropdown -->
+      <select id="filterStatus" class="border p-2 rounded">
+        <option value="active" <?= $filter==='active'?'selected':'' ?>>Active</option>
+        <option value="banned" <?= $filter==='banned'?'selected':'' ?>>Banned</option>
+        <option value="all" <?= $filter==='all'?'selected':'' ?>>All</option>
+      </select>
+    </div>
                 <input id="searchInput" type="text" placeholder="Search residents..." class="p-2 border rounded w-1/3">
             </div>
         </section>
@@ -172,16 +301,14 @@ require_once __DIR__ . "/../pages/header.php";
                                             data-res='<?= htmlspecialchars(json_encode($r), ENT_QUOTES, 'UTF-8') ?>'>
                                         Edit
                                     </button>
-                                    <?php if ($role === 1): // Super Admin only ?>
-                                        <button class="deactivateBtn bg-yellow-500 text-white px-2 py-1 rounded hover:bg-yellow-600"
-                                                data-id="<?= $r['user_id'] ?>">
-                                            <?= $r['is_active'] === 'yes' ? 'Deactivate' : 'Activate' ?>
-                                        </button>
-                                        <button class="deleteBtn bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                                                data-id="<?= $r['user_id'] ?>">
-                                            Delete
-                                        </button>
-                                    <?php endif; ?>
+                                    <?php if ($role >= 3 && $role <= 7): ?>
+  <button
+    class="deactivateBtn bg-yellow-500 text-white px-2 py-1 rounded hover:bg-yellow-600"
+    data-id="<?= $r['user_id'] ?>"
+  >
+    <?= $r['is_active']==='yes' ? 'Ban' : 'Unban' ?>
+  </button>
+<?php endif; ?>
                                 </div>
                             </td>
                         </tr>
@@ -313,6 +440,12 @@ require_once __DIR__ . "/../pages/header.php";
                     toggleModal('viewResidentModal');
                 });
             });
+            document.getElementById('filterStatus').addEventListener('change', function() {
+  const f = this.value;
+  const url = new URL(window.location);
+  url.searchParams.set('filter', f);
+  window.location = url;
+});
 
             // Edit resident
             document.querySelectorAll('.editBtn').forEach(btn => {
@@ -343,36 +476,71 @@ require_once __DIR__ . "/../pages/header.php";
                 });
             });
             document.querySelectorAll('.deactivateBtn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const userId = btn.dataset.id;
-                    const action  = btn.textContent.trim().toLowerCase(); // 'deactivate' or 'activate'
-                    Swal.fire({
-                    title: `${action.charAt(0).toUpperCase() + action.slice(1)} Resident?`,
-                    text: `This will ${action} resident ID ${userId}.`,
-                    icon: 'warning',
-                    confirmButtonColor: '#d33',
-                    cancelButtonColor: '#3085d6',
-                    showCancelButton: true,
-                    confirmButtonText: action.charAt(0).toUpperCase() + action.slice(1),
-                    cancelButtonText: 'Cancel'
-                    }).then(result => {
-                    if (!result.isConfirmed) return;
-                    fetch(`resident_status.php?id=${userId}&action=${action}`, {
-                        method: 'PATCH'
-                    })
-                    .then(res => {
-                        if (!res.ok) throw new Error('Request failed');
-                        return res.json();
-                    })
-                    .then(data => {
-                        if (data.success) {
-                        Swal.fire('Done!', data.message, 'success').then(() => location.reload());
-                        }
-                    })
-                    .catch(err => Swal.fire('Error', err.message, 'error'));
-                    });
-                });
-                });
+  btn.addEventListener('click', () => {
+    const id  = btn.dataset.id;
+    const act = btn.textContent.trim().toLowerCase(); // 'ban' or 'unban'
+
+    if (act === 'ban') {
+      Swal.fire({
+        title: 'Ban Resident?',
+        input: 'textarea',
+        inputPlaceholder: 'Reason for ban...',
+        showCancelButton: true,
+        confirmButtonText: 'Ban',
+        preConfirm: reason => {
+          if (!reason) Swal.showValidationMessage('A reason is required');
+          return reason;
+        }
+      }).then(result => {
+        if (!result.isConfirmed) return;
+        Swal.showLoading();
+        fetch(`residents.php?id=${id}&action=ban`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `remarks=${encodeURIComponent(result.value)}`
+        })
+        .then(r => r.json())
+        .then(data => {
+          Swal.close();
+          if (data.success) {
+            Swal.fire('Banned!', data.message, 'success').then(() => location.reload());
+          } else {
+            Swal.fire('Error', data.message, 'error');
+          }
+        })
+        .catch(() => {
+          Swal.close();
+          Swal.fire('Error', 'Network error occurred', 'error');
+        });
+      });
+
+    } else {
+      Swal.fire({
+        title: 'Unban Resident?',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Unban'
+      }).then(res => {
+        if (!res.isConfirmed) return;
+        Swal.showLoading();
+        fetch(`residents.php?id=${id}&action=unban`)
+          .then(r => r.json())
+          .then(data => {
+            Swal.close();
+            if (data.success) {
+              Swal.fire('Unbanned!', data.message, 'success').then(() => location.reload());
+            } else {
+              Swal.fire('Error', data.message, 'error');
+            }
+          })
+          .catch(() => {
+            Swal.close();
+            Swal.fire('Error', 'Network error occurred', 'error');
+          });
+      });
+    }
+  });
+});
             // Delete handling
             document.querySelectorAll('.deleteBtn').forEach(btn => {
                 btn.addEventListener('click', function() {

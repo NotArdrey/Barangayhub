@@ -1,9 +1,11 @@
 <?php
+
 session_start();
 $error = isset($_SESSION['login_error']) ? $_SESSION['login_error'] : '';
 unset($_SESSION['login_error']);
 
 
+session_regenerate_id(true);
 ?>
 <!DOCTYPE html>
 <html lang="en">

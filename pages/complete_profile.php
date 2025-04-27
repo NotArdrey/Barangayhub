@@ -174,10 +174,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($okUser && $okAddr) {
-            // Redirect to role-based dashboard
-            header("Location: " . getDashboardUrl($_SESSION['role_id']));
-            exit;
-        }
+          // 1) Update the session so we use the new barangay everywhere
+          $_SESSION['barangay_id'] = (int)$formData['barangay_id'];
+      
+          // 2) (Optional) Update the session name if you want
+          $_SESSION['user_name']   = $formData['first_name'].' '.$formData['last_name'];
+      
+          // 3) Now redirect to the correct dashboard
+          header("Location: " . getDashboardUrl($_SESSION['role_id']));
+          exit;
+      }
         $error_message = "Failed to update profile. Please try again.";
     } else {
         $error_message = implode("<br>", $errors);

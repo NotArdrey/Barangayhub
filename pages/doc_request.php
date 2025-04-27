@@ -173,7 +173,67 @@ if (isset($_GET['action'])) {
               $response['message'] = 'Record not found.';
           }
 
-      } elseif ($action === 'send_email') {
+      }elseif ($action === 'ban_user') {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $remarks = $_POST['remarks'] ?? '';
+    
+            // 1) Ban in DB
+            $stmtBan = $pdo->prepare("
+                UPDATE Users
+                   SET is_active = 'no'
+                 WHERE user_id     = :id
+                   AND barangay_id = :bid
+            ");
+            if ($stmtBan->execute([':id'=>$reqId, ':bid'=>$bid])) {
+    
+                // 2) Fetch user email & name
+                $u = $pdo->prepare("
+                    SELECT email, CONCAT(first_name,' ',last_name) AS name
+                      FROM Users
+                     WHERE user_id = :id
+                ");
+                $u->execute([':id'=>$reqId]);
+                $userInfo = $u->fetch();
+    
+                // 3) Send notification email
+                if (!empty($userInfo['email'])) {
+                    try {
+                        $mail = new PHPMailer(true);
+                        $mail->isSMTP();
+                        $mail->Host       = 'smtp.gmail.com';
+                        $mail->SMTPAuth   = true;
+                        $mail->Username   = 'barangayhub2@gmail.com';
+                        $mail->Password   = 'eisy hpjz rdnt bwrp';
+                        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                        $mail->Port       = 587;
+                        $mail->setFrom('noreply@barangayhub.com','Barangay Hub');
+                        $mail->addAddress($userInfo['email'], $userInfo['name']);
+                        $mail->Subject = 'Your account has been banned';
+                        // properly terminate the string and remove the stray backslash
+                        $mail->Body    = "Hello {$userInfo['name']},\n\nYour account has been suspended for the following reason: {$remarks}";
+                        $mail->send();
+                    
+                      } catch (Exception $e) {
+                        // optionally log the error:
+                        error_log('Mailer Error: ' . $mail->ErrorInfo);
+                    }
+                }
+    
+         
+                logAuditTrail(
+                  $pdo, $current_admin_id,
+                  'UPDATE','Users',$reqId,
+                  'Banned user: '.$remarks
+                );
+                $response['success'] = true;
+                $response['message'] = 'User banned and notified.';
+            } else {
+                $response['message'] = 'Unable to ban user.';
+            }
+        } else {
+            $response['message'] = 'Invalid request method.';
+        }
+    }elseif ($action === 'send_email') {
           $stmt = $pdo->prepare("
               SELECT dr.document_request_id,
                      dt.document_name,
@@ -307,42 +367,42 @@ if (isset($_GET['action'])) {
           }
 
       } elseif ($action === 'get_requests') {
-          $stmtPending = $pdo->prepare("
-              SELECT dr.document_request_id,
-                     dr.request_date,
-                     dr.status,
-                     dr.delivery_method,
-                     dt.document_name,
-                     CONCAT(u.first_name,' ',u.last_name) AS requester_name
-              FROM DocumentRequest dr
-              JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-              JOIN Users u ON dr.user_id = u.user_id
-              WHERE u.barangay_id = :bid
-                AND LOWER(dr.status) = 'pending'
-              ORDER BY dr.request_date ASC
-          ");
-          $stmtPending->execute([':bid'=>$bid]);
-          $pending = $stmtPending->fetchAll(PDO::FETCH_ASSOC);
+        $stmtPending = $pdo->prepare("
+        SELECT dr.document_request_id,
+               dr.request_date,
+               dr.status,
+               dr.delivery_method,
+               dt.document_name,
+               CONCAT(u.first_name,' ',u.last_name) AS requester_name
+        FROM DocumentRequest dr
+        JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+        JOIN Users u ON dr.user_id = u.user_id
+        WHERE dr.barangay_id = :bid
+          AND LOWER(dr.status) = 'pending'
+        ORDER BY dr.request_date ASC
+    ");
+    $stmtPending->execute([':bid'=>$bid]);
+    $pending = $stmtPending->fetchAll(PDO::FETCH_ASSOC);
 
-          $stmtCompleted = $pdo->prepare("
-              SELECT dr.document_request_id,
-                     dr.request_date,
-                     dr.status,
-                     dr.delivery_method,
-                     dt.document_name,
-                     CONCAT(u.first_name,' ',u.last_name) AS requester_name
-              FROM DocumentRequest dr
-              JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-              JOIN Users u ON dr.user_id = u.user_id
-              WHERE u.barangay_id = :bid
-                AND LOWER(dr.status) = 'complete'
-              ORDER BY dr.request_date ASC
-          ");
-          $stmtCompleted->execute([':bid'=>$bid]);
-          $completed = $stmtCompleted->fetchAll(PDO::FETCH_ASSOC);
+    $stmtCompleted = $pdo->prepare("
+        SELECT dr.document_request_id,
+               dr.request_date,
+               dr.status,
+               dr.delivery_method,
+               dt.document_name,
+               CONCAT(u.first_name,' ',u.last_name) AS requester_name
+        FROM DocumentRequest dr
+        JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+        JOIN Users u ON dr.user_id = u.user_id
+        WHERE dr.barangay_id = :bid
+          AND LOWER(dr.status) = 'complete'
+        ORDER BY dr.request_date ASC
+    ");
+    $stmtCompleted->execute([':bid'=>$bid]);
+    $completed = $stmtCompleted->fetchAll(PDO::FETCH_ASSOC);
 
-          echo json_encode(['pending'=>$pending,'completed'=>$completed]);
-          exit;
+    echo json_encode(['pending'=>$pending,'completed'=>$completed]);
+    exit;
       }
 
   } catch (Exception $ex) {
@@ -364,18 +424,21 @@ require_once "../pages/header.php";
 
 // 1) Fetch all "Pending" doc requests (FIFO => earliest date first)
 $stmt = $pdo->prepare("
-    SELECT 
+  SELECT 
         dr.document_request_id,
         dr.request_date,
         dr.status,
         dr.delivery_method,
         dt.document_name,
+        u.user_id,
+        u.is_active,
         CONCAT(u.first_name, ' ', u.last_name) AS requester_name
     FROM DocumentRequest dr
     JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-    JOIN Users u ON dr.user_id = u.user_id
-    WHERE u.barangay_id = :bid
-      AND LOWER(dr.status) = 'pending'
+    JOIN Users u          ON dr.user_id           = u.user_id
+    WHERE dr.barangay_id   = :bid
+      AND u.is_active     = 'yes'
+      AND LOWER(dr.status)= 'pending'
     ORDER BY dr.request_date ASC
 ");
 $stmt->execute([':bid' =>$bid]);
@@ -383,7 +446,7 @@ $docRequests = $stmt->fetchAll();
 
 // 2) Fetch all "Complete" doc requests (History), also FIFO => earliest date first
 $stmtHist = $pdo->prepare("
-    SELECT 
+     SELECT 
         dr.document_request_id,
         dr.request_date,
         dr.status,
@@ -393,11 +456,11 @@ $stmtHist = $pdo->prepare("
     FROM DocumentRequest dr
     JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
     JOIN Users u ON dr.user_id = u.user_id
-    WHERE u.barangay_id = :bid
+    WHERE dr.barangay_id = :bid
       AND LOWER(dr.status) = 'complete'
     ORDER BY dr.request_date ASC
 ");
-$stmtHist->execute([':bid' => $bid]);
+$stmtHist->execute([':bid'=>$bid]);
 $completedRequests = $stmtHist->fetchAll();
 ?>
 <!DOCTYPE html>
@@ -493,6 +556,14 @@ $completedRequests = $stmtHist->fetchAll();
                   <button class="deleteDocRequestBtn p-2 text-blue-600 hover:text-blue-900 rounded-lg hover:bg-blue-50" data-id="<?= $req['document_request_id'] ?>">
                     Delete
                   </button>
+                  <?php if ($req['is_active'] === 'yes'): ?>
+                    <button
+                      class="banUserBtn text-red-600 hover:text-red-900"
+                      data-id="<?= $req['user_id'] ?>"
+                    >
+                      Ban User
+                    </button>
+                  <?php endif; ?>
                 </div>
               </td>
             </tr>
@@ -913,6 +984,42 @@ document.querySelectorAll('.viewDocRequestBtn').forEach(btn => {
           Swal.fire('Error', data.message || 'Unable to load details.', 'error');
         }
       });
+  });
+});
+
+
+document.querySelectorAll('.banUserBtn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const userId = btn.dataset.id;
+    Swal.fire({
+      title: 'Ban this user?',
+      input: 'textarea',
+      inputPlaceholder: 'Reason for ban...',
+      showCancelButton: true,
+      confirmButtonText: 'Ban',
+      preConfirm: reason => {
+        if (!reason) Swal.showValidationMessage('You need to provide a reason');
+        return reason;
+      }
+    }).then(result => {
+      if (result.isConfirmed) {
+        Swal.showLoading();
+        fetch(`doc_request.php?action=ban_user&id=${userId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `remarks=${encodeURIComponent(result.value)}`
+        })
+        .then(r => r.json())
+        .then(data => {
+          Swal.close();
+          Swal.fire(
+            data.success ? 'Banned!' : 'Error',
+            data.message,
+            data.success ? 'success' : 'error'
+          ).then(() => data.success && location.reload());
+        });
+      }
+    });
   });
 });
   </script>

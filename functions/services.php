@@ -19,7 +19,7 @@ if (empty($_SESSION['user_id'])) {
     exit;
 }
 
-$userId    = (int)$_SESSION['user_id'];
+$userId    = (int) $_SESSION['user_id'];
 $userEmail = $_SESSION['user_email'] ?? '';
 $userName  = $_SESSION['user_name']  ?? 'User';
 
@@ -52,7 +52,7 @@ try {
 
     /* ─────── payment / proof ─────── */
     $delivery      = $_POST['deliveryMethod'] ?? 'Hardcopy';
-    $paymentAmount = (float)($_POST['paymentAmount'] ?? 0);
+    $paymentAmount = (float) ($_POST['paymentAmount'] ?? 0);
     $proofPath     = null;
 
     if ($delivery === 'Softcopy' && $paymentAmount > 0) {
@@ -77,15 +77,21 @@ try {
     /* ─────── validate doc & barangay ─────── */
     $docTypeId  = filter_input(INPUT_POST, 'document_type_id', FILTER_VALIDATE_INT);
     $barangayId = filter_input(INPUT_POST, 'barangay_id',     FILTER_VALIDATE_INT);
-    if (!$docTypeId || !$barangayId) throw new Exception('Please select document type and barangay.');
+    if (!$docTypeId || !$barangayId) {
+        throw new Exception('Please select document type and barangay.');
+    }
 
     $chk = $pdo->prepare("SELECT COUNT(*) FROM DocumentType WHERE document_type_id = ?");
     $chk->execute([$docTypeId]);
-    if (!$chk->fetchColumn()) throw new Exception('Document type not found.');
+    if (!$chk->fetchColumn()) {
+        throw new Exception('Document type not found.');
+    }
 
     $chk = $pdo->prepare("SELECT COUNT(*) FROM Barangay WHERE barangay_id = ?");
     $chk->execute([$barangayId]);
-    if (!$chk->fetchColumn()) throw new Exception('Barangay not found.');
+    if (!$chk->fetchColumn()) {
+        throw new Exception('Barangay not found.');
+    }
 
     /* ─────── insert request ─────── */
     $pdo->prepare("
@@ -120,20 +126,28 @@ try {
         INSERT INTO AuditTrail
             (admin_user_id, action, table_name, record_id, description)
         VALUES (?,?,?,?,?)
-    ")->execute([$userId, 'INSERT', 'DocumentRequest', $requestId, 'Submitted document request']);
+    ")->execute([
+        $userId,
+        'INSERT',
+        'DocumentRequest',
+        $requestId,
+        'Submitted document request'
+    ]);
 
     $pdo->commit();
 
     $_SESSION['success'] = [
         'title'      => 'Success!',
         'message'    => 'Your document request was submitted.',
-        'processing' => 'We will process it shortly and email to you the update for your requested document.'
+        'processing' => 'We will process it shortly and email you updates on your request.'
     ];
     header('Location: ../pages/services.php');
     exit;
 
 } catch (Exception $e) {
-    if ($pdo->inTransaction()) $pdo->rollBack();
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
     $_SESSION['error'] = $e->getMessage();
     header('Location: ../pages/services.php');
     exit;
