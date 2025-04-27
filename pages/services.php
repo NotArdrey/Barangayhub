@@ -1,165 +1,212 @@
 <?php
 session_start();
-require "../config/dbconn.php"; 
+require_once "../config/dbconn.php";
 
-// Ensure user is logged in
 if (!isset($_SESSION['user_id'])) {
     header("Location: ../pages/index.php");
     exit;
 }
+$stmt = $pdo->query("
+SELECT dt.document_type_id, dt.document_name, df.fee
+FROM DocumentType dt
+LEFT JOIN DocumentFee df
+  ON df.document_type = LOWER(REPLACE(dt.document_name,' ',''))
+");
+$documentTypes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$documentFees = [
+    'barangayClearance' => 50.00,
+    'firstTimeJobSeeker' => 0.00,
+    'proofOfResidency' => 30.00,
+    'barangayIndigency' => 20.00,
+    'goodMoralCertificate' => 30.00,
+    'noIncomeCertification' => 0.00
+];
+
+$userId = $_SESSION['user_id'];
+$userBarangayId = null;
+
+try {
+    $stmt = $pdo->prepare("SELECT barangay_id FROM Users WHERE user_id = ?");
+    $stmt->execute([$userId]);
+    $userBarangay = $stmt->fetch(PDO::FETCH_ASSOC);
+    $userBarangayId = $userBarangay['barangay_id'];
+} catch (PDOException $e) {
+    $_SESSION['error'] = "Database error: " . $e->getMessage();
+}
+
+$gcash_number = 'Not available';
+if ($userBarangayId) {
+    try {
+        $stmt = $pdo->prepare("SELECT account_details FROM BarangayPaymentMethod 
+            WHERE barangay_id = ? AND method = 'GCash' AND is_active = 'yes'");
+        $stmt->execute([$userBarangayId]);
+        $gcashData = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($gcashData) $gcash_number = $gcashData['account_details'];
+    } catch (PDOException $e) {
+        $_SESSION['error'] = "Database error: " . $e->getMessage();
+    }
+}
+
+try {
+    $stmt = $pdo->prepare("SELECT barangay_id, barangay_name FROM Barangay ORDER BY barangay_name");
+    $stmt->execute();
+    $barangays = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $_SESSION['error'] = "Database error: " . $e->getMessage();
+}
+
+$selectedDocumentType = $_GET['documentType'] ?? '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Barangay Hub - Document Request</title>
-  <!-- Google Fonts -->
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
-  <!-- Font Awesome -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
-  <!-- Existing CSS for UI -->
-  <link rel="stylesheet" href="../styles/services.css" />
-  <!-- SweetAlert2 for notifications -->
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barangay Hub - Document Request</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="../styles/services.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 </head>
 <body>
-  <!-- Navigation -->
-  <header>
-    <nav class="navbar">
-      <a href="#" class="logo">
-        <img src="../photo/logo.png" alt="Barangay Hub Logo" />
-        <h2>Barangay Hub</h2>
-      </a>
-      <button class="mobile-menu-btn" aria-label="Toggle navigation menu">
-        <i class="fas fa-bars"></i>
-      </button>
-      <div class="nav-links">
-        <a href="../pages/user_dashboard.php#home">Home</a>
-        <a href="../pages/user_dashboard.php#about">About</a>
-        <a href="../pages/user_dashboard.php#services">Services</a>
-        <a href="../pages/user_dashboard.php#contact">Contact</a>
-        <a href="edit_account.php">Account</a>
-        <a href="../functions/logout.php" style="color: red;"><i class="fas fa-sign-out-alt"></i> Logout</a>
-      </div>
-    </nav>
-  </header>
+    <?php if (isset($_SESSION['success'])): ?>
+    <script>
+        Swal.fire({
+            title: '<?= $_SESSION['success']['title'] ?>',
+            html: `<b><?= $_SESSION['success']['message'] ?></b><br><br><?= $_SESSION['success']['processing'] ?>`,
+            icon: 'success'
+        }).then(() => {
+            window.location.href = 'user_dashboard.php';
+        });
+    </script>
+    <?php unset($_SESSION['success']); endif; ?>
 
-  <!-- Single-Card Form Section -->
-  <main>
-    <section class="wizard-section">
-      <div class="wizard-container">
-        <h2 class="form-header">Document Request</h2>
-        <form id="documentRequestForm" action="../functions/services.php" method="POST" enctype="multipart/form-data" class="wizard-form">
-          <!-- ID Upload Field -->
-          <div class="form-row upload-id">
-            <label for="uploadId">
-              Upload Your ID (Govt-issued ID or Birth Certificate)
-            </label>
-            <input type="file" name="uploadId" id="uploadId" accept="image/*" required />
-            <div id="idPreviewContainer">
-              <img id="uploadIdPreview" src="" alt="ID Preview" style="max-width:200px; display:none;" />
-            </div>
-          </div>
-          <!-- Document Type Selection -->
-          <div class="form-row">
-            <label for="documentType">Select Document</label>
-            <select id="documentType" name="documentType" required>
-              <option value="">Select Document</option>
-              <option value="barangayClearance">Barangay Clearance</option>
-              <option value="firstTimeJobSeeker">First Time Job Seeker</option>
-              <option value="proofOfResidency">Proof of Residency</option>
-              <option value="barangayIndigency">Barangay Indigency</option>
-              <option value="goodMoralCertificate">Good Moral Certificate</option>
-              <option value="noIncomeCertification">No Income Certification</option>
-            </select>
-          </div>
-          <!-- Document-Specific Optional Fields -->
-          <div id="barangayClearanceFields" class="doc-fields" style="display:none;">
-            <div class="form-row">
-              <label for="purposeClearance">Purpose</label>
-              <input type="text" id="purposeClearance" name="purposeClearance" placeholder="Enter purpose for Barangay Clearance">
-            </div>
-          </div>
-          <div id="proofOfResidencyFields" class="doc-fields" style="display:none;">
-            <div class="form-row">
-              <label for="residencyDuration">Duration of Residency</label>
-              <input type="text" id="residencyDuration" name="residencyDuration" placeholder="Enter residency duration">
-            </div>
-            <div class="form-row">
-              <label for="residencyPurpose">Purpose</label>
-              <input type="text" id="residencyPurpose" name="residencyPurpose" placeholder="Enter purpose">
-            </div>
-          </div>
-          <div id="goodMoralCertificateFields" class="doc-fields" style="display:none;">
-            <div class="form-row">
-              <label for="gmcPurpose">Purpose</label>
-              <input type="text" id="gmcPurpose" name="gmcPurpose" placeholder="Enter purpose">
-            </div>
-          </div>
-          <div id="noIncomeCertificationFields" class="doc-fields" style="display:none;">
-            <div class="form-row">
-              <label for="nicReason">Reason for Request</label>
-              <input type="text" id="nicReason" name="nicReason" placeholder="Enter reason">
-            </div>
-          </div>
-          <div id="barangayIndigencyFields" class="doc-fields" style="display:none;">
-            <div class="form-row">
-              <label for="indigencyIncome">Monthly Income</label>
-              <input type="text" id="indigencyIncome" name="indigencyIncome" placeholder="Enter monthly income">
-            </div>
-            <div class="form-row">
-              <label for="indigencyReason">Reason for Indigency</label>
-              <input type="text" id="indigencyReason" name="indigencyReason" placeholder="Enter reason">
-            </div>
-          </div>
-          <!-- Delivery Method -->
-          <div class="form-row">
-            <label for="deliveryMethod">Delivery Method</label>
-            <select id="deliveryMethod" name="deliveryMethod" required>
-              <option value="">Select Delivery Method</option>
-              <option value="Softcopy">Softcopy</option>
-              <option value="Hardcopy">Hardcopy</option>
-            </select>
-          </div>
-          <button type="submit" class="btn cta-button">Submit Request</button>
-        </form>
-      </div>
-    </section>
-  </main>
+    <?php if (isset($_SESSION['error'])): ?>
+    <script>
+        Swal.fire({
+            title: 'Error',
+            text: '<?= $_SESSION['error'] ?>',
+            icon: 'error'
+        });
+    </script>
+    <?php unset($_SESSION['error']); endif; ?>
 
-  <!-- Footer -->
-  <footer class="footer">
-    <p>&copy; 2025 Barangay Hub. All rights reserved.</p>
-  </footer>
+    <header>
+        <nav class="navbar">
+            <a href="#" class="logo">
+                <img src="../photo/logo.png" alt="Barangay Hub Logo">
+                <h2>Barangay Hub</h2>
+            </a>
+            <div class="nav-links">
+                <a href="../pages/user_dashboard.php#home">Home</a>
+                <a href="../pages/user_dashboard.php#about">About</a>
+                <a href="../pages/user_dashboard.php#services">Services</a>
+                <a href="../pages/user_dashboard.php#contact">Contact</a>
+                <a href="edit_account.php">Account</a>
+                <a href="../functions/logout.php" style="color: red;"><i class="fas fa-sign-out-alt"></i> Logout</a>
+            </div>
+        </nav>
+    </header>
 
-  <!-- JavaScript for Field Handling -->
-  <script>
-    // Document Type change handler: show/hide document-specific fields
-    const documentTypeSelect = document.getElementById('documentType');
-    documentTypeSelect.addEventListener('change', function() {
-      const selected = this.value;
-      const docFields = document.querySelectorAll('.doc-fields');
-      docFields.forEach(field => field.style.display = 'none');
-      if (selected) {
-        const target = document.getElementById(selected + 'Fields');
-        if (target) target.style.display = 'block';
-      }
-    });
+    <main>
+        <section class="wizard-section">
+            <div class="wizard-container">
+                <h2 class="form-header">Document Request</h2>
+                <form method="POST" action="../functions/services.php" enctype="multipart/form-data">
+                    <div class="form-row upload-id">
+                        <label for="uploadId">Upload Valid ID</label>
+                        <input type="file" name="uploadId" id="uploadId" 
+                               accept="image/jpeg,image/png,application/pdf" required>
+                        <small>Accepted formats: JPG, PNG, PDF (Max 2MB)</small>
+                    </div>
 
-    // Image preview for ID file upload
-    document.getElementById("uploadId").addEventListener("change", function(event) {
-      const file = event.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-          const preview = document.getElementById("uploadIdPreview");
-          preview.src = e.target.result;
-          preview.style.display = "block";
-        };
-        reader.readAsDataURL(file);
-      }
-    });
-  </script>
+                    <div class="form-row">
+                        <label for="barangaySelect">Select Barangay</label>
+                        <select id="barangaySelect" name="barangay_id" required>
+                            <option value="">Select Barangay</option>
+                            <?php foreach ($barangays as $b): ?>
+                            <option value="<?= $b['barangay_id'] ?>" 
+                                <?= $b['barangay_id'] === $userBarangayId ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($b['barangay_name']) ?>
+                            </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="form-row">
+                    <label for="documentType">Document Type</label>
+                    <select id="documentType"
+                            name="document_type_id"
+                            required>
+                      <option value="">Select Document</option>
+                      <?php foreach ($documentTypes as $doc): ?>
+                        <option
+                          value="<?= $doc['document_type_id'] ?>"
+                          data-fee="<?= $doc['fee'] ?? 0 ?>"
+                        >
+                          <?= htmlspecialchars($doc['document_name']) ?>
+                          (<?= $doc['fee'] > 0 ? '₱'.number_format($doc['fee'],2) : 'Free' ?>)
+                        </option>
+                      <?php endforeach; ?>
+                    </select>
+                  </div>
+
+                    <div class="form-row">
+                        <label for="deliveryMethod">Delivery Method</label>
+                        <select id="deliveryMethod" name="deliveryMethod" required>
+                            <option value="">Select Delivery Method</option>
+                            <option value="Softcopy">Softcopy (Digital)</option>
+                            <option value="Hardcopy">Hardcopy (Physical)</option>
+                        </select>
+                    </div>
+
+                    <div id="payment-section" style="display: none;">
+                        <div class="payment-info">
+                            <h3>Payment Details</h3>
+                            <div class="fee-display">
+                                <span>Document Fee:</span>
+                                <strong id="feeAmount">₱0.00</strong>
+                            </div>
+                            <p>Send payment to: <strong><?= $gcash_number ?></strong></p>
+                        </div>
+
+                        <div class="form-row">
+                            <label for="uploadProof">Upload Payment Receipt</label>
+                            <input type="file" name="uploadProof" id="uploadProof" 
+                                   accept="image/jpeg,image/png,application/pdf">
+                            <small>Accepted formats: JPG, PNG, PDF (Max 2MB)</small>
+                        </div>
+                    </div>
+
+                    <input type="hidden" id="paymentAmount" name="paymentAmount" value="0">
+
+                    <button type="submit" class="btn cta-button">Submit Request</button>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>&copy; 2025 Barangay Hub. All rights reserved.</p>
+    </footer>
+
+    <script>
+        document.getElementById('documentType').addEventListener('change', function() {
+            const fee = this.options[this.selectedIndex].dataset.fee;
+            document.getElementById('feeAmount').textContent = 
+                fee > 0 ? `₱${parseFloat(fee).toFixed(2)}` : 'Free';
+            document.getElementById('paymentAmount').value = fee;
+            togglePaymentSection();
+        });
+
+        document.getElementById('deliveryMethod').addEventListener('change', togglePaymentSection);
+
+        function togglePaymentSection() {
+            const delivery = document.getElementById('deliveryMethod').value;
+            const fee = parseFloat(document.getElementById('paymentAmount').value);
+            document.getElementById('payment-section').style.display = 
+                (delivery === 'Softcopy' && fee > 0) ? 'block' : 'none';
+        }
+    </script>
 </body>
 </html>

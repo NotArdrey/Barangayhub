@@ -2,7 +2,7 @@
 session_start();
 require "../config/dbconn.php";
 header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
-
+//../pages/user_dashboard.php
 $events_result = [];
 
 if (isset($_SESSION['user_id'])) {
@@ -19,15 +19,18 @@ if (isset($_SESSION['user_id'])) {
         $currentDateTime = date('Y-m-d H:i:s');
 
         // Fetch events using PDO
-        $events_sql = "SELECT * FROM events 
-            WHERE barangay_id = ? 
-            AND (status = 'scheduled' OR status = 'postponed')
-            ORDER BY 
-              CASE WHEN status = 'postponed' THEN 1 ELSE 0 END,
-              start_datetime ASC";
-        $stmt = $pdo->prepare($events_sql);
-        $stmt->execute([$barangay_id, $currentDateTime]);
-        $events_result = $stmt->fetchAll();
+        $events_sql = "
+        SELECT *
+          FROM events
+         WHERE barangay_id = ?
+           AND (status = 'scheduled' OR status = 'postponed')
+         ORDER BY
+           CASE WHEN status = 'postponed' THEN 1 ELSE 0 END,
+           start_datetime ASC
+      ";
+      $stmt = $pdo->prepare($events_sql);
+      $stmt->execute([$barangay_id]);   // only bind barangay_id
+      $events_result = $stmt->fetchAll();
     }
 }
 ?>
@@ -109,103 +112,87 @@ if (isset($_SESSION['user_id'])) {
 
     <!-- Services Section -->
     <section class="services-section" id="services">
-      <div class="section-header">
-        <h2>Our Services</h2>
-        <p>Access a variety of barangay services online</p>
+    <div class="services-container">
+  <div class="services-list">
+    <div class="service-item"
+         onclick="window.location.href='../pages/services.php?documentType=barangayClearance';"
+         style="cursor:pointer;">
+      <div class="service-icon"><i class="fas fa-file-alt"></i></div>
+      <div class="service-content">
+        <h3>Barangay Clearance</h3>
+        <p>Obtain official barangay clearance for various transactions and requirements.</p>
+        <a href="../pages/services.php?documentType=barangayClearance" class="service-cta">
+          Get Started <i class="fas fa-arrow-right arrow-icon"></i>
+        </a>
       </div>
-      <div class="services-container">
-        <div class="services-list">
-          <!-- Barangay Clearance -->
-          <div class="service-item" onclick="window.location.href='../pages/services.php?service=barangayClearance';" style="cursor:pointer;">
-            <div class="service-icon">
-              <i class="fas fa-file-alt"></i>
-            </div>
-            <div class="service-content">
-              <h3>Barangay Clearance</h3>
-              <p>Obtain official barangay clearance for various transactions and requirements.</p>
-              <a href="../pages/services.php?service=barangayClearance" class="service-cta">
-                Get Started
-                <i class="fas fa-arrow-right arrow-icon"></i>
-              </a>
-            </div>
-          </div>
+    </div>
 
-          <!-- First Time Job Seeker -->
-          <div class="service-item" onclick="window.location.href='../pages/services.php';" style="cursor:pointer;">
-            <div class="service-icon">
-              <i class="fas fa-briefcase"></i>
-            </div>
-            <div class="service-content">
-              <h3>First Time Job Seeker</h3>
-              <p>Assistance and certification for first-time job seekers in the community.</p>
-              <a href="../pages/services.php" class="service-cta">
-                Apply Now
-                <i class="fas fa-arrow-right arrow-icon"></i>
-              </a>
-            </div>
-          </div>
-
-          <!-- Proof of Residency -->
-          <div class="service-item" onclick="window.location.href='../pages/services.php?service=proofOfResidency';" style="cursor:pointer;">
-            <div class="service-icon">
-              <i class="fas fa-home"></i>
-            </div>
-            <div class="service-content">
-              <h3>Proof of Residency</h3>
-              <p>Get official certification of your residency status for legal and administrative purposes.</p>
-              <a href="../pages/services.php?service=proofOfResidency" class="service-cta">
-                Request Certificate
-                <i class="fas fa-arrow-right arrow-icon"></i>
-              </a>
-            </div>
-          </div>
-
-          <!-- Barangay Indigency -->
-          <div class="service-item" onclick="window.location.href='../pages/services.php?service=barangayIndigency';" style="cursor:pointer;">
-            <div class="service-icon">
-              <i class="fas fa-hand-holding-heart"></i>
-            </div>
-            <div class="service-content">
-              <h3>Barangay Indigency</h3>
-              <p>Obtain certification for social welfare and financial assistance programs.</p>
-              <a href="../pages/services.php?service=barangayIndigency" class="service-cta">
-                Apply Here
-                <i class="fas fa-arrow-right arrow-icon"></i>
-              </a>
-            </div>
-          </div>
-
-          <!-- Good Moral Certificate -->
-          <div class="service-item" onclick="window.location.href='../pages/services.php?service=goodMoralCertificate';" style="cursor:pointer;">
-            <div class="service-icon">
-              <i class="fas fa-user-check"></i>
-            </div>
-            <div class="service-content">
-              <h3>Good Moral Certificate</h3>
-              <p>Request certification of good moral character for employment and education purposes.</p>
-              <a href="../pages/services.php?service=goodMoralCertificate" class="service-cta">
-                Get Certified
-                <i class="fas fa-arrow-right arrow-icon"></i>
-              </a>
-            </div>
-          </div>
-
-          <!-- No Income Certification -->
-          <div class="service-item" onclick="window.location.href='../pages/services.php?service=noIncomeCertification';" style="cursor:pointer;">
-            <div class="service-icon">
-              <i class="fas fa-file-invoice-dollar"></i>
-            </div>
-            <div class="service-content">
-              <h3>No Income Certification</h3>
-              <p>Official certification for individuals without regular income source.</p>
-              <a href="../pages/services.php?service=noIncomeCertification" class="service-cta">
-                Request Now
-                <i class="fas fa-arrow-right arrow-icon"></i>
-              </a>
-            </div>
-          </div>
-        </div>
+    <div class="service-item"
+         onclick="window.location.href='../pages/services.php?documentType=firstTimeJobSeeker';"
+         style="cursor:pointer;">
+      <div class="service-icon"><i class="fas fa-briefcase"></i></div>
+      <div class="service-content">
+        <h3>First Time Job Seeker</h3>
+        <p>Assistance and certification for first-time job seekers in the community.</p>
+        <a href="../pages/services.php?documentType=firstTimeJobSeeker" class="service-cta">
+          Apply Now <i class="fas fa-arrow-right arrow-icon"></i>
+        </a>
       </div>
+    </div>
+
+    <div class="service-item"
+         onclick="window.location.href='../pages/services.php?documentType=proofOfResidency';"
+         style="cursor:pointer;">
+      <div class="service-icon"><i class="fas fa-home"></i></div>
+      <div class="service-content">
+        <h3>Proof of Residency</h3>
+        <p>Get official certification of your residency status for legal and administrative purposes.</p>
+        <a href="../pages/services.php?documentType=proofOfResidency" class="service-cta">
+          Request Certificate <i class="fas fa-arrow-right arrow-icon"></i>
+        </a>
+      </div>
+    </div>
+
+    <div class="service-item"
+         onclick="window.location.href='../pages/services.php?documentType=barangayIndigency';"
+         style="cursor:pointer;">
+      <div class="service-icon"><i class="fas fa-hand-holding-heart"></i></div>
+      <div class="service-content">
+        <h3>Barangay Indigency</h3>
+        <p>Obtain certification for social welfare and financial assistance programs.</p>
+        <a href="../pages/services.php?documentType=barangayIndigency" class="service-cta">
+          Apply Here <i class="fas fa-arrow-right arrow-icon"></i>
+        </a>
+      </div>
+    </div>
+
+    <div class="service-item"
+         onclick="window.location.href='../pages/services.php?documentType=goodMoralCertificate';"
+         style="cursor:pointer;">
+      <div class="service-icon"><i class="fas fa-user-check"></i></div>
+      <div class="service-content">
+        <h3>Good Moral Certificate</h3>
+        <p>Request certification of good moral character for employment and education purposes.</p>
+        <a href="../pages/services.php?documentType=goodMoralCertificate" class="service-cta">
+          Get Certified <i class="fas fa-arrow-right arrow-icon"></i>
+        </a>
+      </div>
+    </div>
+
+    <div class="service-item"
+         onclick="window.location.href='../pages/services.php?documentType=noIncomeCertification';"
+         style="cursor:pointer;">
+      <div class="service-icon"><i class="fas fa-file-invoice-dollar"></i></div>
+      <div class="service-content">
+        <h3>No Income Certification</h3>
+        <p>Official certification for individuals without regular income source.</p>
+        <a href="../pages/services.php?documentType=noIncomeCertification" class="service-cta">
+          Request Now <i class="fas fa-arrow-right arrow-icon"></i>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
     </section>
 
     <style>

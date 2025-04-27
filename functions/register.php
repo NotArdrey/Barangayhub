@@ -114,7 +114,7 @@ elseif ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 
     // Set role_id for residents (every new user gets role_id = 3)
-    $role_id = 6;
+    $role_id = 8;
 
     if (empty($errors)) {
         // Hash the password

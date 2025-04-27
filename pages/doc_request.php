@@ -40,102 +40,224 @@ function logAuditTrail($pdo, $adminId, $action, $tableName, $recordId, $descript
     ]);
 }
 
+// Handle insert/update
+if (isset($_POST['barangay_id'], $_POST['account_details'])) {
+  $bid  = intval($_POST['barangay_id']);
+  $acct = trim($_POST['account_details']);
+  if ($bid && $acct) {
+      $stmt = $pdo->prepare("
+          INSERT INTO BarangayPaymentMethod (barangay_id, account_details)
+          VALUES (?, ?)
+          ON DUPLICATE KEY UPDATE
+              account_details = VALUES(account_details),
+              is_active       = 'yes'
+      ");
+      $stmt->execute([$bid, $acct]);
+      // Grab the ID (either new or updated)
+      $pmid = $pdo->lastInsertId() ?: 
+             $pdo->query("SELECT payment_method_id FROM BarangayPaymentMethod WHERE barangay_id = $bid")->fetchColumn();
+      logAuditTrail(
+        $pdo,
+        $current_admin_id,
+        'UPDATE',
+        'BarangayPaymentMethod',
+        $pmid,
+        "Set GCash to “{$acct}” and activated"
+      );
+  }
+}
+
+// 2) Deactivate
+if (isset($_POST['deactivate_payment_method_id'])) {
+  $pmid = intval($_POST['deactivate_payment_method_id']);
+  $pdo->prepare("UPDATE BarangayPaymentMethod SET is_active = 'no' WHERE payment_method_id = ?")
+      ->execute([$pmid]);
+  logAuditTrail(
+    $pdo,
+    $current_admin_id,
+    'UPDATE',
+    'BarangayPaymentMethod',
+    $pmid,
+    'Deactivated GCash account'
+  );
+}
+
+// 3) Activate
+if (isset($_POST['activate_payment_method_id'])) {
+  $pmid = intval($_POST['activate_payment_method_id']);
+  $pdo->prepare("UPDATE BarangayPaymentMethod SET is_active = 'yes' WHERE payment_method_id = ?")
+      ->execute([$pmid]);
+  logAuditTrail(
+    $pdo,
+    $current_admin_id,
+    'UPDATE',
+    'BarangayPaymentMethod',
+    $pmid,
+    'Activated GCash account'
+  );
+}
+
+
+// Fetch for listing
+$stmt = $pdo->prepare("
+  SELECT pm.payment_method_id,
+         b.barangay_name,
+         pm.account_details,
+         pm.is_active
+    FROM BarangayPaymentMethod pm
+    JOIN Barangay b
+      ON pm.barangay_id = b.barangay_id
+   WHERE pm.barangay_id = ?
+");
+$stmt->execute([$bid]);
+$payments = $stmt->fetchAll();
+
+// Also fetch the barangay name to display
+$barangayName = $pdo->prepare("SELECT barangay_name FROM Barangay WHERE barangay_id = ?");
+$barangayName->execute([$bid]);
+$barangayName = $barangayName->fetchColumn();
+
 // ------------------------------------------------------
 // 2. Check if we have an AJAX or direct action; if so, return JSON or process
 // ------------------------------------------------------
 if (isset($_GET['action'])) {
+  header('Content-Type: application/json');
+  $action   = $_GET['action'];
+  $reqId    = isset($_GET['id']) ? intval($_GET['id']) : 0;
+  $response = ['success' => false, 'message' => ''];
 
-    // Set up JSON header (for AJAX responses); no HTML before this.
-    header('Content-Type: application/json');
-    $action   = $_GET['action'];
-    $response = ['success' => false, 'message' => ''];
-
-    // Safely fetch the request ID
-    $reqId = isset($_GET['id']) ? intval($_GET['id']) : 0;
-
-    try {
-        // ---------------------------------------
-        // (A) VIEW DETAILS OF A SPECIFIC REQUEST
-        // ---------------------------------------
-        if ($action === 'view_doc_request') {
-            $stmt = $pdo->prepare("
-              SELECT
-                  dr.document_request_id,
-                  dr.request_date,
-                  dr.status,
-                  dr.delivery_method,
-                  dr.remarks AS request_remarks,
-                  dt.document_name,
-                  u.user_id, u.email, u.contact_number, u.birth_date,
-                  u.gender, u.marital_status,
-                  u.emergency_contact_name, u.emergency_contact_number,
-                  u.emergency_contact_address, u.id_image_path,
-                  CONCAT(u.first_name,' ',COALESCE(u.middle_name,''),' ',u.last_name) AS full_name,
-                  MAX(CASE WHEN a.attr_key='clearance_purpose'  THEN a.attr_value END) AS clearance_purpose,
-                  MAX(CASE WHEN a.attr_key='residency_duration' THEN a.attr_value END) AS residency_duration,
-                  MAX(CASE WHEN a.attr_key='residency_purpose'  THEN a.attr_value END) AS residency_purpose,
-                  MAX(CASE WHEN a.attr_key='gmc_purpose'        THEN a.attr_value END) AS gmc_purpose,
-                  MAX(CASE WHEN a.attr_key='nic_reason'         THEN a.attr_value END) AS nic_reason,
-                  MAX(CASE WHEN a.attr_key='indigency_income'   THEN a.attr_value END) AS indigency_income,
-                  MAX(CASE WHEN a.attr_key='indigency_reason'   THEN a.attr_value END) AS indigency_reason
-              FROM DocumentRequest dr
-              JOIN DocumentType  dt ON dr.document_type_id = dt.document_type_id
-              JOIN Users         u  ON dr.user_id          = u.user_id
-              LEFT JOIN DocumentRequestAttribute a ON a.request_id = dr.document_request_id
-              WHERE dr.document_request_id = :id
-              GROUP BY dr.document_request_id
-            ");
-            $stmt->execute([':id' => $reqId]);
-            $result = $stmt->fetch();
-
-            if ($result) {
-                $response['success']       = true;
-                $response['request']       = $result;
-
-                // Optional: log "view" action
-                logAuditTrail($pdo, $current_admin_id, 'VIEW', 'DocumentRequest', $reqId, 'Viewed document request details.');
-            } else {
-                $response['message']       = 'Record not found.';
-            }
-
-        // ------------------------------------------------
-        // (B) SEND EMAIL FOR SOFTCOPY & AUTOMATIC COMPLETE
-        // ------------------------------------------------
-        } elseif ($action === 'send_email') {
-
-          // 1) Fetch requester's info
+  try {
+      if ($action === 'view_doc_request') {
           $stmt = $pdo->prepare("
-              SELECT 
-                  dr.document_request_id,
-                  dt.document_name,
-                  u.email,
-                  CONCAT(u.first_name, ' ', u.last_name) AS requester_name
+              SELECT dr.document_request_id,
+                     dr.request_date,
+                     dr.status,
+                     dr.delivery_method,
+                     dr.proof_image_path,
+                     dr.remarks AS request_remarks,
+                     dt.document_name,
+                     u.user_id,
+                     u.email,
+                     u.contact_number,
+                     u.birth_date,
+                     u.gender,
+                     u.marital_status,
+                     u.emergency_contact_name,
+                     u.emergency_contact_number,
+                     u.emergency_contact_address,
+                     u.id_image_path,
+                     CONCAT(u.first_name,' ',COALESCE(u.middle_name,''),' ',u.last_name) AS full_name,
+                     MAX(CASE WHEN a.attr_key='clearance_purpose'  THEN a.attr_value END) AS clearance_purpose,
+                     MAX(CASE WHEN a.attr_key='residency_duration' THEN a.attr_value END) AS residency_duration,
+                     MAX(CASE WHEN a.attr_key='residency_purpose'  THEN a.attr_value END) AS residency_purpose,
+                     MAX(CASE WHEN a.attr_key='gmc_purpose'        THEN a.attr_value END) AS gmc_purpose,
+                     MAX(CASE WHEN a.attr_key='nic_reason'         THEN a.attr_value END) AS nic_reason,
+                     MAX(CASE WHEN a.attr_key='indigency_income'   THEN a.attr_value END) AS indigency_income,
+                     MAX(CASE WHEN a.attr_key='indigency_reason'   THEN a.attr_value END) AS indigency_reason
+              FROM DocumentRequest dr
+              JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+              JOIN Users u ON dr.user_id = u.user_id
+              LEFT JOIN DocumentRequestAttribute a ON dr.document_request_id = a.request_id
+              WHERE dr.barangay_id = :bid
+                AND dr.document_request_id = :id
+                AND LOWER(dr.status) = 'pending'
+              GROUP BY dr.document_request_id
+          ");
+          $stmt->execute([':bid'=>$bid, ':id'=>$reqId]);
+          $result = $stmt->fetch();
+          if ($result) {
+              $response['success'] = true;
+              $response['request'] = $result;
+              logAuditTrail($pdo, $current_admin_id, 'VIEW', 'DocumentRequest', $reqId, 'Viewed document request details.');
+          } else {
+              $response['message'] = 'Record not found.';
+          }
+
+      }elseif ($action === 'ban_user') {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $remarks = $_POST['remarks'] ?? '';
+    
+            // 1) Ban in DB
+            $stmtBan = $pdo->prepare("
+                UPDATE Users
+                   SET is_active = 'no'
+                 WHERE user_id     = :id
+                   AND barangay_id = :bid
+            ");
+            if ($stmtBan->execute([':id'=>$reqId, ':bid'=>$bid])) {
+    
+                // 2) Fetch user email & name
+                $u = $pdo->prepare("
+                    SELECT email, CONCAT(first_name,' ',last_name) AS name
+                      FROM Users
+                     WHERE user_id = :id
+                ");
+                $u->execute([':id'=>$reqId]);
+                $userInfo = $u->fetch();
+    
+                // 3) Send notification email
+                if (!empty($userInfo['email'])) {
+                    try {
+                        $mail = new PHPMailer(true);
+                        $mail->isSMTP();
+                        $mail->Host       = 'smtp.gmail.com';
+                        $mail->SMTPAuth   = true;
+                        $mail->Username   = 'barangayhub2@gmail.com';
+                        $mail->Password   = 'eisy hpjz rdnt bwrp';
+                        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                        $mail->Port       = 587;
+                        $mail->setFrom('noreply@barangayhub.com','Barangay Hub');
+                        $mail->addAddress($userInfo['email'], $userInfo['name']);
+                        $mail->Subject = 'Your account has been banned';
+                        // properly terminate the string and remove the stray backslash
+                        $mail->Body    = "Hello {$userInfo['name']},\n\nYour account has been suspended for the following reason: {$remarks}";
+                        $mail->send();
+                    
+                      } catch (Exception $e) {
+                        // optionally log the error:
+                        error_log('Mailer Error: ' . $mail->ErrorInfo);
+                    }
+                }
+    
+         
+                logAuditTrail(
+                  $pdo, $current_admin_id,
+                  'UPDATE','Users',$reqId,
+                  'Banned user: '.$remarks
+                );
+                $response['success'] = true;
+                $response['message'] = 'User banned and notified.';
+            } else {
+                $response['message'] = 'Unable to ban user.';
+            }
+        } else {
+            $response['message'] = 'Invalid request method.';
+        }
+    }elseif ($action === 'send_email') {
+          $stmt = $pdo->prepare("
+              SELECT dr.document_request_id,
+                     dt.document_name,
+                     u.email,
+                     CONCAT(u.first_name,' ',u.last_name) AS requester_name
               FROM DocumentRequest dr
               JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
               JOIN Users u ON dr.user_id = u.user_id
               WHERE dr.document_request_id = :id
+                AND dr.barangay_id = :bid
           ");
-          $stmt->execute([':id' => $reqId]);
-          $result = $stmt->fetch();
-      
-          if ($result && !empty($result['email'])) {
-              require_once '../vendor/autoload.php';
-
-      
-              // Generate the template HTML
+          $stmt->execute([':id'=>$reqId, ':bid'=>$bid]);
+          $info = $stmt->fetch();
+          if ($info && !empty($info['email'])) {
               ob_start();
-              include "../functions/document_template.php?id=$reqId";
+              $docRequestId = $reqId;
+              require __DIR__ . '/../functions/document_template.php';
               $html = ob_get_clean();
-      
-              // Generate PDF from HTML
               $dompdf = new Dompdf();
               $dompdf->loadHtml($html);
-              $dompdf->setPaper('A4', 'portrait');
+              $dompdf->setPaper('A4','portrait');
               $dompdf->render();
               $pdfOutput = $dompdf->output();
-              $pdfFileName = 'document_request_' . $reqId . '.pdf';
-      
-              // Send Email using PHPMailer
+              $pdfName   = "document_request_{$reqId}.pdf";
               $mail = new PHPMailer(true);
               try {
                   $mail->isSMTP();
@@ -145,154 +267,152 @@ if (isset($_GET['action'])) {
                   $mail->Password   = 'eisy hpjz rdnt bwrp';
                   $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
                   $mail->Port       = 587;
-      
-                  $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
-                  $mail->addAddress($result['email'], $result['requester_name']);
-      
-                  $mail->Subject = 'Your Document Request: ' . $result['document_name'];
-                  $mail->Body    = "Hello {$result['requester_name']},\n\nYour request for '{$result['document_name']}' has been processed. Please find the attached document.\n\nThank you!";
-                  $mail->addStringAttachment($pdfOutput, $pdfFileName, 'base64', 'application/pdf');
-      
-                  if ($mail->send()) {
-                      $updateStmt = $pdo->prepare("
-                          UPDATE DocumentRequest 
-                          SET status = 'Complete' 
-                          WHERE document_request_id = :id
-                      ");
-                      $updateStmt->execute([':id' => $reqId]);
-      
-                      logAuditTrail(
-                          $pdo, 
-                          $current_admin_id, 
-                          'UPDATE', 
-                          'DocumentRequest', 
-                          $reqId, 
-                          'Sent document via email (with PDF) and marked as complete.'
-                      );
-      
-                      $response['success'] = true;
-                      $response['message'] = 'Email sent successfully with PDF and marked as complete.';
-                  } else {
-                      $response['message'] = 'Unable to send email.';
-                  }
+                  $mail->setFrom('noreply@barangayhub.com','Barangay Hub');
+                  $mail->addAddress($info['email'], $info['requester_name']);
+                  $mail->Subject = 'Your Document Request: ' . $info['document_name'];
+                  $mail->Body    = "Hello {$info['requester_name']},\n\nPlease find attached your requested document.";
+                  $mail->addStringAttachment($pdfOutput, $pdfName, 'base64', 'application/pdf');
+                  $mail->send();
+                  $upd = $pdo->prepare("
+                      UPDATE DocumentRequest
+                      SET status = 'Complete'
+                      WHERE document_request_id = :id AND barangay_id = :bid
+                  ");
+                  $upd->execute([':id'=>$reqId,':bid'=>$bid]);
+                  logAuditTrail($pdo, $current_admin_id, 'UPDATE','DocumentRequest',$reqId,'Sent PDF and marked complete.');
+                  $response['success'] = true;
+                  $response['message'] = 'Email sent & marked complete.';
               } catch (Exception $e) {
-                  $response['message'] = 'Mailer Error: ' . $mail->ErrorInfo;
+                  $response['message'] = 'Mailer error: '.$mail->ErrorInfo;
               }
           } else {
-              $response['message'] = 'Request or email information not found.';
+              $response['message'] = 'Request/email info not found.';
           }
-        // -------------------------------------
-        // (C) MARK DOCUMENT REQUEST AS COMPLETE
-        // -------------------------------------
-        } elseif ($action === 'complete') {
 
-            // 1) Mark as complete (Hardcopy scenario)
-            $stmt = $pdo->prepare("
-                UPDATE DocumentRequest 
-                SET status = 'Complete' 
-                WHERE document_request_id = :id
-            ");
-            if ($stmt->execute([':id' => $reqId])) {
-                // Log to audit trail
-                logAuditTrail(
-                    $pdo,
-                    $current_admin_id,
-                    'UPDATE',
-                    'DocumentRequest',
-                    $reqId,
-                    'Manually marked document as complete (hardcopy).'
-                );
+      } elseif ($action === 'print') {
+          ob_start();
+          $docRequestId = $reqId;
+          require __DIR__ . '/../functions/document_template.php';
+          $html = ob_get_clean();
+          $dompdf = new Dompdf();
+          $dompdf->loadHtml($html);
+          $dompdf->setPaper('A4','portrait');
+          $dompdf->render();
+          header('Content-Type: application/pdf');
+          header("Content-Disposition: inline; filename=\"document_request_{$reqId}.pdf\"");
+          echo $dompdf->output();
+          exit;
 
-                $response['success'] = true;
-                $response['message'] = 'Document request marked as complete.';
-            } else {
-                $response['message'] = 'Unable to mark request as complete.';
-            }
+      } elseif ($action === 'complete') {
+          $stmt = $pdo->prepare("
+              UPDATE DocumentRequest
+              SET status = 'Complete'
+              WHERE document_request_id = :id AND barangay_id = :bid
+          ");
+          if ($stmt->execute([':id'=>$reqId,':bid'=>$bid])) {
+              logAuditTrail($pdo,$current_admin_id,'UPDATE','DocumentRequest',$reqId,'Marked complete manually.');
+              $response['success'] = true;
+              $response['message'] = 'Marked complete.';
+          } else {
+              $response['message'] = 'Unable to mark complete.';
+          }
 
-        // -----------------------------
-        // (D) DELETE (WITH REMARKS)
-        // -----------------------------
-        } elseif ($action === 'delete') {
-            // We expect a POST request with 'remarks'
-            $remarks = $_POST['remarks'] ?? '';
+      } elseif ($action === 'delete') {
+          $remarks = $_POST['remarks'] ?? '';
+          $stmt = $pdo->prepare("
+              SELECT dr.document_request_id,
+                     dt.document_name,
+                     u.email,
+                     CONCAT(u.first_name,' ',u.last_name) AS requester_name
+              FROM DocumentRequest dr
+              JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+              JOIN Users u ON dr.user_id = u.user_id
+              WHERE dr.document_request_id = :id
+                AND dr.barangay_id = :bid
+          ");
+          $stmt->execute([':id'=>$reqId,':bid'=>$bid]);
+          $requestInfo = $stmt->fetch();
+          if (!$requestInfo) {
+              $response['message'] = 'Request not found; cannot delete.';
+              echo json_encode($response);
+              exit;
+          }
+          if (!empty($requestInfo['email'])) {
+              $mail = new PHPMailer(true);
+              try {
+                  $mail->isSMTP();
+                  $mail->Host       = 'smtp.gmail.com';
+                  $mail->SMTPAuth   = true;
+                  $mail->Username   = 'barangayhub2@gmail.com';
+                  $mail->Password   = 'eisy hpjz rdnt bwrp';
+                  $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                  $mail->Port       = 587;
+                  $mail->setFrom('noreply@barangayhub.com','Barangay Hub');
+                  $mail->addAddress($requestInfo['email'], $requestInfo['requester_name']);
+                  $mail->Subject = 'Document Request Not Processed';
+                  $mail->Body    = "Hello {$requestInfo['requester_name']},\n\nYour request for '{$requestInfo['document_name']}' has been declined.\n\nReason: {$remarks}";
+                  $mail->send();
+              } catch (Exception $e) {}
+          }
+          $stmtDel = $pdo->prepare("
+              DELETE FROM DocumentRequest
+              WHERE document_request_id = :id AND barangay_id = :bid
+          ");
+          if ($stmtDel->execute([':id'=>$reqId,':bid'=>$bid])) {
+              logAuditTrail($pdo,$current_admin_id,'DELETE','DocumentRequest',$reqId,'Deleted request with remarks: '.$remarks);
+              $response['success'] = true;
+              $response['message'] = 'Request deleted.';
+          } else {
+              $response['message'] = 'Unable to delete request.';
+          }
 
-            // 1) Fetch request info + user email
-            $stmt = $pdo->prepare("
-                SELECT 
-                    dr.document_request_id,
-                    dt.document_name,
-                    u.email,
-                    CONCAT(u.first_name, ' ', u.last_name) AS requester_name
-                FROM DocumentRequest dr
-                JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-                JOIN Users u ON dr.user_id = u.user_id
-                WHERE dr.document_request_id = :id
-            ");
-            $stmt->execute([':id' => $reqId]);
-            $requestInfo = $stmt->fetch();
+      } elseif ($action === 'get_requests') {
+        $stmtPending = $pdo->prepare("
+        SELECT dr.document_request_id,
+               dr.request_date,
+               dr.status,
+               dr.delivery_method,
+               dt.document_name,
+               CONCAT(u.first_name,' ',u.last_name) AS requester_name
+        FROM DocumentRequest dr
+        JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+        JOIN Users u ON dr.user_id = u.user_id
+        WHERE dr.barangay_id = :bid
+          AND LOWER(dr.status) = 'pending'
+        ORDER BY dr.request_date ASC
+    ");
+    $stmtPending->execute([':bid'=>$bid]);
+    $pending = $stmtPending->fetchAll(PDO::FETCH_ASSOC);
 
-            if (!$requestInfo) {
-                $response['message'] = 'Request not found; cannot delete.';
-                echo json_encode($response);
-                exit;
-            }
+    $stmtCompleted = $pdo->prepare("
+        SELECT dr.document_request_id,
+               dr.request_date,
+               dr.status,
+               dr.delivery_method,
+               dt.document_name,
+               CONCAT(u.first_name,' ',u.last_name) AS requester_name
+        FROM DocumentRequest dr
+        JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
+        JOIN Users u ON dr.user_id = u.user_id
+        WHERE dr.barangay_id = :bid
+          AND LOWER(dr.status) = 'complete'
+        ORDER BY dr.request_date ASC
+    ");
+    $stmtCompleted->execute([':bid'=>$bid]);
+    $completed = $stmtCompleted->fetchAll(PDO::FETCH_ASSOC);
 
-            // 2) Email user about the reason for deletion
-            if (!empty($requestInfo['email'])) {
-                $mail = new PHPMailer(true);
-                try {
-                    $mail->isSMTP();
-                    $mail->Host       = 'smtp.gmail.com';
-                    $mail->SMTPAuth   = true;
-                    // Adjust credentials accordingly:
-                    $mail->Username   = 'barangayhub2@gmail.com';
-                    $mail->Password   = 'eisy hpjz rdnt bwrp';
-                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-                    $mail->Port       = 587;
-
-                    $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
-                    $mail->addAddress($requestInfo['email'], $requestInfo['requester_name']);
-
-                    $mail->Subject = 'Document Request Not Processed';
-                    $mail->Body    = "Hello {$requestInfo['requester_name']},\n\n"
-                                   . "Your request for '{$requestInfo['document_name']}' has been declined/removed.\n\n"
-                                   . "Reason/Remarks:\n{$remarks}\n\n"
-                                   . "If you have any questions, please contact our office. Thank you.";
-
-                    $mail->send(); // best-effort; no need to check if it fails here
-                } catch (Exception $e) {
-                    // If email fails, we still proceed with deletion
-                }
-            }
-
-            // 3) Delete from DB
-            $stmtDel = $pdo->prepare("DELETE FROM DocumentRequest WHERE document_request_id = :id");
-            if ($stmtDel->execute([':id' => $reqId])) {
-                // Log to audit trail
-                logAuditTrail(
-                    $pdo,
-                    $current_admin_id,
-                    'DELETE',
-                    'DocumentRequest',
-                    $reqId,
-                    'Deleted document request with remarks: ' . $remarks
-                );
-
-                $response['success'] = true;
-                $response['message'] = 'Document request deleted successfully.';
-            } else {
-                $response['message'] = 'Unable to delete document request.';
-            }
-        }
-
-    } catch (Exception $ex) {
-        $response['message'] = 'Server Error: ' . $ex->getMessage();
-    }
-
-    // Respond with JSON and stop
-    echo json_encode($response);
+    echo json_encode(['pending'=>$pending,'completed'=>$completed]);
     exit;
+      }
+
+  } catch (Exception $ex) {
+      $response['message'] = 'Server Error: '.$ex->getMessage();
+  }
+
+  echo json_encode($response);
+  exit;
 }
+
 
 // ----------------------------------------------------
 // 3. Only include header + HTML if no specific action
@@ -304,18 +424,21 @@ require_once "../pages/header.php";
 
 // 1) Fetch all "Pending" doc requests (FIFO => earliest date first)
 $stmt = $pdo->prepare("
-    SELECT 
+  SELECT 
         dr.document_request_id,
         dr.request_date,
         dr.status,
         dr.delivery_method,
         dt.document_name,
+        u.user_id,
+        u.is_active,
         CONCAT(u.first_name, ' ', u.last_name) AS requester_name
     FROM DocumentRequest dr
     JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
-    JOIN Users u ON dr.user_id = u.user_id
-    WHERE u.barangay_id = :bid
-      AND LOWER(dr.status) = 'pending'
+    JOIN Users u          ON dr.user_id           = u.user_id
+    WHERE dr.barangay_id   = :bid
+      AND u.is_active     = 'yes'
+      AND LOWER(dr.status)= 'pending'
     ORDER BY dr.request_date ASC
 ");
 $stmt->execute([':bid' =>$bid]);
@@ -323,7 +446,7 @@ $docRequests = $stmt->fetchAll();
 
 // 2) Fetch all "Complete" doc requests (History), also FIFO => earliest date first
 $stmtHist = $pdo->prepare("
-    SELECT 
+     SELECT 
         dr.document_request_id,
         dr.request_date,
         dr.status,
@@ -333,11 +456,11 @@ $stmtHist = $pdo->prepare("
     FROM DocumentRequest dr
     JOIN DocumentType dt ON dr.document_type_id = dt.document_type_id
     JOIN Users u ON dr.user_id = u.user_id
-    WHERE u.barangay_id = :bid
+    WHERE dr.barangay_id = :bid
       AND LOWER(dr.status) = 'complete'
     ORDER BY dr.request_date ASC
 ");
-$stmtHist->execute([':bid' => $bid]);
+$stmtHist->execute([':bid'=>$bid]);
 $completedRequests = $stmtHist->fetchAll();
 ?>
 <!DOCTYPE html>
@@ -354,7 +477,9 @@ $completedRequests = $stmtHist->fetchAll();
 </head>
 <body class="bg-gray-100">
   <div class="container mx-auto p-4">
-
+  <button id="showGcashModalBtn" class="mb-6 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded">
+    Manage GCash Payments
+  </button>
     <!-- Pending Requests Section -->
     <section id="docRequests" class="mb-10">
   <header class="mb-6">
@@ -431,6 +556,14 @@ $completedRequests = $stmtHist->fetchAll();
                   <button class="deleteDocRequestBtn p-2 text-blue-600 hover:text-blue-900 rounded-lg hover:bg-blue-50" data-id="<?= $req['document_request_id'] ?>">
                     Delete
                   </button>
+                  <?php if ($req['is_active'] === 'yes'): ?>
+                    <button
+                      class="banUserBtn text-red-600 hover:text-red-900"
+                      data-id="<?= $req['user_id'] ?>"
+                    >
+                      Ban User
+                    </button>
+                  <?php endif; ?>
                 </div>
               </td>
             </tr>
@@ -611,14 +744,14 @@ $completedRequests = $stmtHist->fetchAll();
 
       // (1) VIEW Document Request (show all user details + ID image)
      
-      // (2) PRINT Document Request (Hardcopy)
       document.querySelectorAll('.printDocRequestBtn').forEach(btn => {
-        btn.addEventListener('click', function() {
-          let requestId = this.getAttribute('data-id');
-          // If you have a specific print page or method, adapt here:
-            window.open(`../functions/document_template.php?id=${requestId}`, '_blank');
-        });
-      });
+  btn.addEventListener('click', function() {
+    const requestId = this.getAttribute('data-id');
+
+    // open generated PDF inline in new tab
+    window.open(`doc_request.php?action=print&id=${requestId}`, '_blank');
+  });
+});
 
       // (3) SEND EMAIL (Softcopy) => Confirm => Send => Auto-complete
       document.querySelectorAll('.sendDocEmailBtn').forEach(btn => {
@@ -753,8 +886,29 @@ $completedRequests = $stmtHist->fetchAll();
 
     function toggleViewDocModal() {
   document.getElementById('viewDocModal').classList.toggle('hidden');
-}
+}document.addEventListener('DOMContentLoaded', () => {
+  const gcashModal = document.getElementById('gcashModal');
+  const showBtn   = document.getElementById('showGcashModalBtn');
+  const closeBtn  = document.getElementById('closeGcashModal');
 
+  showBtn.addEventListener('click', () => {
+    gcashModal.classList.remove('hidden');
+  });
+  closeBtn.addEventListener('click', () => {
+    gcashModal.classList.add('hidden');
+  });
+  gcashModal.addEventListener('click', e => {
+    if (e.target === gcashModal) {
+      gcashModal.classList.add('hidden');
+    }
+  });
+});
+
+// Prefill the GCash input when clicking Edit
+function populateGcash(account) {
+  document.getElementById('account_details').value = account;
+  document.getElementById('gcashModal').classList.remove('hidden');
+}
 document.querySelectorAll('.viewDocRequestBtn').forEach(btn => {
   btn.addEventListener('click', function() {
     const requestId = this.dataset.id;
@@ -781,9 +935,49 @@ document.querySelectorAll('.viewDocRequestBtn').forEach(btn => {
           
           // Handle ID Image
           const idImageContainer = document.getElementById('viewIdImage');
-          idImageContainer.innerHTML = r.id_image_path 
-            ? `<img src="${r.id_image_path}" class="max-w-[300px] h-auto border rounded" alt="ID Image">`
-            : 'No ID image available';
+        idImageContainer.innerHTML = '';                    // clear it first
+        if (r.id_image_path) {
+          const img = document.createElement('img');
+          img.src = `../${r.id_image_path}`;                // <-- prepend "../"
+          img.alt = 'ID Image';
+          img.className = 'max-w-[300px] h-auto border rounded cursor-zoom-in';
+          img.addEventListener('click', () => {
+            Swal.fire({
+              imageUrl: `../${r.id_image_path}`,
+              imageAlt: 'ID Image',
+              showConfirmButton: false,
+              showCloseButton: true,
+              background: 'transparent',
+              backdrop: 'rgba(0,0,0,0.8)'
+            });
+          });
+          idImageContainer.appendChild(img);
+        } else {
+          idImageContainer.textContent = 'No ID image available';
+        }
+
+        // 2) Proof of Payment
+        const proofContainer = document.getElementById('viewProofImage');
+        proofContainer.innerHTML = '';
+        if (r.proof_image_path) {
+          const img2 = document.createElement('img');
+          img2.src = `../${r.proof_image_path}`;
+          img2.alt = 'Proof of Payment';
+          img2.className = 'max-w-[300px] h-auto border rounded cursor-zoom-in';
+          img2.addEventListener('click', () => {
+            Swal.fire({
+              imageUrl: `../${r.proof_image_path}`,
+              imageAlt: 'Proof of Payment',
+              showConfirmButton: false,
+              showCloseButton: true,
+              background: 'transparent',
+              backdrop: 'rgba(0,0,0,0.8)'
+            });
+          });
+          proofContainer.appendChild(img2);
+        } else {
+          proofContainer.textContent = 'No proof of payment available';
+        }
 
           toggleViewDocModal();
         } else {
@@ -792,7 +986,123 @@ document.querySelectorAll('.viewDocRequestBtn').forEach(btn => {
       });
   });
 });
+
+
+document.querySelectorAll('.banUserBtn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const userId = btn.dataset.id;
+    Swal.fire({
+      title: 'Ban this user?',
+      input: 'textarea',
+      inputPlaceholder: 'Reason for ban...',
+      showCancelButton: true,
+      confirmButtonText: 'Ban',
+      preConfirm: reason => {
+        if (!reason) Swal.showValidationMessage('You need to provide a reason');
+        return reason;
+      }
+    }).then(result => {
+      if (result.isConfirmed) {
+        Swal.showLoading();
+        fetch(`doc_request.php?action=ban_user&id=${userId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `remarks=${encodeURIComponent(result.value)}`
+        })
+        .then(r => r.json())
+        .then(data => {
+          Swal.close();
+          Swal.fire(
+            data.success ? 'Banned!' : 'Error',
+            data.message,
+            data.success ? 'success' : 'error'
+          ).then(() => data.success && location.reload());
+        });
+      }
+    });
+  });
+});
   </script>
+
+  <!-- GCash Modal -->
+  <div id="gcashModal"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+  <div class="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-xl font-semibold">Manage GCash Account</h2>
+      <button id="closeGcashModal" class="text-gray-400 hover:text-gray-600">&times;</button>
+    </div>
+
+    <!-- Form -->
+    <form action="doc_request.php" method="POST" class="space-y-4 mb-6">
+      <!-- Read-only Barangay -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700">Barangay</label>
+        <p class="mt-1 text-gray-900"><?= htmlspecialchars($barangayName) ?></p>
+        <input type="hidden" name="barangay_id" value="<?= $bid ?>">
+      </div>
+
+      <!-- GCash Number -->
+      <div>
+        <label for="account_details" class="block text-sm font-medium text-gray-700">GCash Number</label>
+        <input
+          type="text"
+          name="account_details"
+          id="account_details"
+          required
+          placeholder="Enter GCash number"
+          class="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500"
+        >
+      </div>
+
+      <button type="submit"
+              class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-md">
+        Save
+      </button>
+    </form>
+
+    <hr class="my-4">
+
+    <!-- Existing Account (if any) -->
+    <?php if (!empty($payments)): 
+      $pm = $payments[0]; ?>
+      <div class="flex items-center justify-between">
+        <div>
+          <span class="font-medium"><?= htmlspecialchars($pm['barangay_name']) ?>:</span>
+          <span class="ml-2"><?= htmlspecialchars($pm['account_details']) ?></span>
+          <span class="ml-2 inline-block px-2 py-0.5 text-sm <?= $pm['is_active']==='yes' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600' ?> rounded">
+            <?= ucfirst($pm['is_active']) ?>
+          </span>
+        </div>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            onclick="populateGcash('<?= htmlspecialchars($pm['account_details'], ENT_QUOTES) ?>')"
+            class="bg-gray-500 hover:bg-gray-600 text-white py-1 px-3 rounded-md"
+          >
+            Edit
+          </button>
+          <form action="doc_request.php" method="POST" class="inline">
+            <?php if ($pm['is_active'] === 'yes'): ?>
+              <input type="hidden" name="deactivate_payment_method_id" value="<?= $pm['payment_method_id'] ?>">
+              <button type="submit" class="bg-red-500 hover:bg-red-600 text-white py-1 px-3 rounded-md">
+                Deactivate
+              </button>
+            <?php else: ?>
+              <input type="hidden" name="activate_payment_method_id" value="<?= $pm['payment_method_id'] ?>">
+              <button type="submit" class="bg-green-500 hover:bg-green-600 text-white py-1 px-3 rounded-md">
+                Activate
+              </button>
+            <?php endif; ?>
+          </form>
+        </div>
+      </div>
+    <?php else: ?>
+      <p class="text-gray-500 italic">No GCash account configured yet.</p>
+    <?php endif; ?>
+  </div>
+</div>
 
 
   <!-- View Document Request Modal -->
@@ -839,6 +1149,9 @@ document.querySelectorAll('.viewDocRequestBtn').forEach(btn => {
 
         <h4 class="text-lg font-medium pt-4 border-t">ID Image</h4>
         <div id="viewIdImage" class="mt-2"></div>
+
+        <h4 class="text-lg font-medium pt-4 border-t">Proof of Payment</h4>
+        <div id="viewProofImage" class="mt-2">—</div>
       </div>
       <!-- Footer -->
       <div class="flex items-center justify-end p-5 border-t border-gray-200">

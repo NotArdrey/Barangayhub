@@ -1,19 +1,25 @@
 <?php
 session_start();
-require "../vendor/autoload.php";
-require "../config/dbconn.php";
+require __DIR__ . "/../vendor/autoload.php";
+require __DIR__ . "/../config/dbconn.php";
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role_id'] < 2) {
+// Cast session values to integers for strict comparison
+$current_admin_id = isset($_SESSION['user_id'])       ? (int) $_SESSION['user_id']       : null;
+$role             = isset($_SESSION['role_id'])       ? (int) $_SESSION['role_id']       : null;
+$bid              = isset($_SESSION['barangay_id'])   ? (int) $_SESSION['barangay_id']   : null;
+
+define('ROLE_RESIDENT', 8);
+$filter = $_GET['filter'] ?? 'active';
+// Access control: only Super Admin (2) and Barangay-specific Admins (3–7) can view
+if ($current_admin_id === null || !in_array($role, [2,3,4,5,6,7], true)) {
     header("Location: ../pages/index.php");
     exit;
 }
 
-$current_admin_id = $_SESSION['user_id'];
-$bid = $_SESSION['barangay_id'];
-$role = $_SESSION['role_id'];
-define('ROLE_RESIDENT', 3);
-
-function logAuditTrail($pdo, $admin, $action, $table, $id, $desc) {
+/**
+ * Audit trail logger
+ */
+function logAuditTrail(PDO $pdo, int $admin, string $action, string $table, int $id, string $desc): void {
     $stmt = $pdo->prepare(
         "INSERT INTO AuditTrail (admin_user_id, action, table_name, record_id, description)
          VALUES (:admin, :act, :tbl, :rid, :desc)"
@@ -23,94 +29,217 @@ function logAuditTrail($pdo, $admin, $action, $table, $id, $desc) {
         ':act'   => $action,
         ':tbl'   => $table,
         ':rid'   => $id,
-        ':desc'  => $desc
+        ':desc'  => $desc,
     ]);
 }
-$query = "SELECT u.*, a.street AS home_address 
-          FROM Users u
-          LEFT JOIN Address a ON u.user_id = a.user_id
-          WHERE u.role_id = :role";
+
+// Build query to fetch residents (role_id = ROLE_RESIDENT)
+$sql = <<<SQL
+SELECT u.*, a.street AS home_address
+  FROM Users u
+  LEFT JOIN Address a ON u.user_id = a.user_id
+ WHERE u.role_id = :role
+SQL;
 $params = [':role' => ROLE_RESIDENT];
 
-// For barangay admins (role 2), filter by their barangay
-if ($role === 2) {
-    $query .= " AND u.barangay_id = :bid";
+// ─── Barangay scope (unchanged) ──────────────────────
+if ($role >= 3 && $role <= 7) {
+    $sql           .= " AND u.barangay_id = :bid";
     $params[':bid'] = $bid;
+}
+if (isset($_GET['action'], $_GET['id'])) {
+    header('Content-Type: application/json');
+    $resId   = (int) $_GET['id'];
+    $act     = $_GET['action'];  // 'ban' or 'unban'
+
+    // Fetch user email and name
+    $stmtUser = $pdo->prepare("
+        SELECT email, CONCAT(first_name,' ', last_name) AS name
+          FROM Users
+         WHERE user_id = :id
+    ");
+    $stmtUser->execute([':id' => $resId]);
+    $userInfo = $stmtUser->fetch(PDO::FETCH_ASSOC);
+
+    if ($act === 'ban' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Grab the ban reason
+        $remarks = $_POST['remarks'] ?? '';
+
+        // Deactivate the user
+        $stmt = $pdo->prepare("
+            UPDATE Users
+               SET is_active = 'no'
+             WHERE user_id     = :id
+               AND barangay_id = :bid
+        ");
+        $success = $stmt->execute([':id' => $resId, ':bid' => $bid]);
+        if ($success) {
+            // Send ban email with reason
+            if (!empty($userInfo['email'])) {
+                try {
+                    $mail = new PHPMailer(true);
+                    $mail->isSMTP();
+                    $mail->Host       = 'smtp.gmail.com';
+                    $mail->SMTPAuth   = true;
+                    $mail->Username   = 'barangayhub2@gmail.com';
+                    $mail->Password   = 'eisy hpjz rdnt bwrp';
+                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mail->Port       = 587;
+                    $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+                    $mail->addAddress($userInfo['email'], $userInfo['name']);
+                    $mail->Subject = 'Your account has been suspended';
+                    $mail->Body    = "Hello {$userInfo['name']},\n\n"
+                                   . "Your account has been suspended for the following reason:\n"
+                                   . "{$remarks}\n\n"
+                                   . "If you believe this is a mistake, please contact your barangay administrator.";
+                    $mail->send();
+                } catch (Exception $e) {
+                    error_log('Mailer Error: ' . $mail->ErrorInfo);
+                }
+            }
+            // Log audit with remarks
+            logAuditTrail(
+                $pdo,
+                $current_admin_id,
+                'UPDATE',
+                'Users',
+                $resId,
+                'Banned resident: ' . $remarks
+            );
+            echo json_encode(['success' => true, 'message' => 'Resident banned and notified.']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Unable to ban resident.']);
+        }
+
+    } elseif ($act === 'unban') {
+        // Reactivate the user
+        $stmt = $pdo->prepare("
+            UPDATE Users
+               SET is_active = 'yes'
+             WHERE user_id     = :id
+               AND barangay_id = :bid
+        ");
+        $success = $stmt->execute([':id' => $resId, ':bid' => $bid]);
+        if ($success) {
+            // Send unban email
+            if (!empty($userInfo['email'])) {
+                try {
+                    $mail = new PHPMailer(true);
+                    $mail->isSMTP();
+                    $mail->Host       = 'smtp.gmail.com';
+                    $mail->SMTPAuth   = true;
+                    $mail->Username   = 'barangayhub2@gmail.com';
+                    $mail->Password   = 'eisy hpjz rdnt bwrp';
+                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mail->Port       = 587;
+                    $mail->setFrom('noreply@barangayhub.com', 'Barangay Hub');
+                    $mail->addAddress($userInfo['email'], $userInfo['name']);
+                    $mail->Subject = 'Your account has been reactivated';
+                    $mail->Body    = "Hello {$userInfo['name']},\n\n"
+                                   . "Your account has been reactivated.\n"
+                                   . "You can now log in and continue using the system.";
+                    $mail->send();
+                } catch (Exception $e) {
+                    error_log('Mailer Error: ' . $mail->ErrorInfo);
+                }
+            }
+            logAuditTrail(
+                $pdo,
+                $current_admin_id,
+                'UPDATE',
+                'Users',
+                $resId,
+                'Unbanned resident.'
+            );
+            echo json_encode(['success' => true, 'message' => 'Resident unbanned and notified.']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Unable to unban resident.']);
+        }
+
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Invalid action or method.']);
+    }
+    exit;
+}
+
+// ─── Active/banned filter ────────────────────────────
+if ($filter === 'active') {
+    $sql .= " AND u.is_active = 'yes'";
+} elseif ($filter === 'banned') {
+    $sql .= " AND u.is_active = 'no'";
 }
 
 try {
-    $stmt = $pdo->prepare($query);
+    $stmt      = $pdo->prepare($sql);
     $stmt->execute($params);
     $residents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     die("Error fetching residents: " . $e->getMessage());
 }
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_resident_submit'])) {
-  $user_id = (int)$_POST['edit_person_id'];
-  $fields = [
-      'first_name', 'middle_name', 'last_name', 'email', 'birth_date',
-      'gender', 'contact_number', 'marital_status',
-      'emergency_contact_name', 'emergency_contact_number',
-      'emergency_contact_address'
-  ];
-  
-  $params = [':user_id' => $user_id];
-  $update = [];
-  
-  foreach ($fields as $f) {
-      $update[] = "$f = :$f";
-      $params[":$f"] = trim($_POST["edit_$f"] ?? '');
-  }
-  
-  try {
-      $pdo->beginTransaction();
-      
-      // Update Users table
-      $stmt = $pdo->prepare("UPDATE Users SET " . implode(',', $update) . " WHERE user_id = :user_id");
-      $stmt->execute($params);
-      
-      // Update/Insert Address table
-      $home_address = trim($_POST['edit_home_address'] ?? '');
-      
-      // First try to update
-      $check = $pdo->prepare("SELECT 1 FROM Address WHERE user_id = :user_id");
-      $check->execute([':user_id' => $user_id]);
 
-      if ($check->fetch()) {
-          // 2a) It exists → do your UPDATE
-          $upd = $pdo->prepare("
-              UPDATE Address
-                SET street = :street
-              WHERE user_id = :user_id
-          ");
-          $upd->execute([
-              ':street'  => $home_address,
-              ':user_id' => $user_id
-          ]);
-      } else {
-          // 2b) It doesn’t exist → INSERT
-          $ins = $pdo->prepare("
-              INSERT INTO Address (user_id, street)
-              VALUES (:user_id, :street)
-          ");
-          $ins->execute([
-              ':user_id' => $user_id,
-              ':street'  => $home_address
-          ]);
-      }
-      logAuditTrail($pdo, $current_admin_id, 'UPDATE', 'Users', $user_id, "Updated resident ID $user_id");
-      $pdo->commit();
-      $_SESSION['success_message'] = 'Resident updated successfully.';
-  } catch (PDOException $e) {
-      $pdo->rollBack();
-      $_SESSION['error_message'] = 'Error: ' . $e->getMessage();
-  }
-  header('Location: residents.php');
-  exit;
+// Handle edit form submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_resident_submit'])) {
+    $user_id = (int) ($_POST['edit_person_id'] ?? 0);
+    $fields  = [
+        'first_name', 'middle_name', 'last_name', 'email', 'birth_date',
+        'gender', 'contact_number', 'marital_status',
+        'emergency_contact_name', 'emergency_contact_number',
+        'emergency_contact_address'
+    ];
+
+    $updateParts = [];
+    $params      = [':user_id' => $user_id];
+
+    foreach ($fields as $field) {
+        $updateParts[]        = "{$field} = :{$field}";
+        $params[":{$field}"] = trim($_POST["edit_{$field}"] ?? '');
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        // Update Users table
+        $updateSql = "UPDATE Users SET " . implode(', ', $updateParts) . " WHERE user_id = :user_id";
+        $stmt      = $pdo->prepare($updateSql);
+        $stmt->execute($params);
+
+        // Update or insert Address
+        $homeAddress = trim($_POST['edit_home_address'] ?? '');
+        $checkStmt   = $pdo->prepare("SELECT 1 FROM Address WHERE user_id = :user_id");
+        $checkStmt->execute([':user_id' => $user_id]);
+
+        if ($checkStmt->fetch()) {
+            $upd = $pdo->prepare("UPDATE Address SET street = :street WHERE user_id = :user_id");
+            $upd->execute([':street' => $homeAddress, ':user_id' => $user_id]);
+        } else {
+            $ins = $pdo->prepare("INSERT INTO Address (user_id, street) VALUES (:user_id, :street)");
+            $ins->execute([':user_id' => $user_id, ':street' => $homeAddress]);
+        }
+
+        // Log audit trail
+        logAuditTrail(
+            $pdo,
+            $current_admin_id,
+            'UPDATE',
+            'Users',
+            $user_id,
+            "Updated resident ID {$user_id}"
+        );
+
+        $pdo->commit();
+        $_SESSION['success_message'] = 'Resident updated successfully.';
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        $_SESSION['error_message'] = 'Error: ' . $e->getMessage();
+    }
+
+    header('Location: residents.php');
+    exit;
 }
 
-require_once "../pages/header.php";
+require_once __DIR__ . "/../pages/header.php";
 ?>
+
 
 <!DOCTYPE html>
 <html lang="en">
@@ -130,8 +259,16 @@ require_once "../pages/header.php";
         <?php endif; ?>
 
         <section class="mb-6">
-            <div class="flex justify-between items-center">
-                <h1 class="text-3xl font-bold text-blue-800">Residents Management</h1>
+  <div class="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+    <div class="flex items-center space-x-3">
+      <h1 class="text-3xl font-bold text-blue-800">Residents Management</h1>
+      <!-- Filter dropdown -->
+      <select id="filterStatus" class="border p-2 rounded">
+        <option value="active" <?= $filter==='active'?'selected':'' ?>>Active</option>
+        <option value="banned" <?= $filter==='banned'?'selected':'' ?>>Banned</option>
+        <option value="all" <?= $filter==='all'?'selected':'' ?>>All</option>
+      </select>
+    </div>
                 <input id="searchInput" type="text" placeholder="Search residents..." class="p-2 border rounded w-1/3">
             </div>
         </section>
@@ -164,16 +301,14 @@ require_once "../pages/header.php";
                                             data-res='<?= htmlspecialchars(json_encode($r), ENT_QUOTES, 'UTF-8') ?>'>
                                         Edit
                                     </button>
-                                    <?php if ($role === 1): // Super Admin only ?>
-                                        <button class="deactivateBtn bg-yellow-500 text-white px-2 py-1 rounded hover:bg-yellow-600"
-                                                data-id="<?= $r['user_id'] ?>">
-                                            <?= $r['is_active'] === 'yes' ? 'Deactivate' : 'Activate' ?>
-                                        </button>
-                                        <button class="deleteBtn bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                                                data-id="<?= $r['user_id'] ?>">
-                                            Delete
-                                        </button>
-                                    <?php endif; ?>
+                                    <?php if ($role >= 3 && $role <= 7): ?>
+  <button
+    class="deactivateBtn bg-yellow-500 text-white px-2 py-1 rounded hover:bg-yellow-600"
+    data-id="<?= $r['user_id'] ?>"
+  >
+    <?= $r['is_active']==='yes' ? 'Ban' : 'Unban' ?>
+  </button>
+<?php endif; ?>
                                 </div>
                             </td>
                         </tr>
@@ -305,6 +440,12 @@ require_once "../pages/header.php";
                     toggleModal('viewResidentModal');
                 });
             });
+            document.getElementById('filterStatus').addEventListener('change', function() {
+  const f = this.value;
+  const url = new URL(window.location);
+  url.searchParams.set('filter', f);
+  window.location = url;
+});
 
             // Edit resident
             document.querySelectorAll('.editBtn').forEach(btn => {
@@ -335,36 +476,71 @@ require_once "../pages/header.php";
                 });
             });
             document.querySelectorAll('.deactivateBtn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const userId = btn.dataset.id;
-                    const action  = btn.textContent.trim().toLowerCase(); // 'deactivate' or 'activate'
-                    Swal.fire({
-                    title: `${action.charAt(0).toUpperCase() + action.slice(1)} Resident?`,
-                    text: `This will ${action} resident ID ${userId}.`,
-                    icon: 'warning',
-                    confirmButtonColor: '#d33',
-                    cancelButtonColor: '#3085d6',
-                    showCancelButton: true,
-                    confirmButtonText: action.charAt(0).toUpperCase() + action.slice(1),
-                    cancelButtonText: 'Cancel'
-                    }).then(result => {
-                    if (!result.isConfirmed) return;
-                    fetch(`resident_status.php?id=${userId}&action=${action}`, {
-                        method: 'PATCH'
-                    })
-                    .then(res => {
-                        if (!res.ok) throw new Error('Request failed');
-                        return res.json();
-                    })
-                    .then(data => {
-                        if (data.success) {
-                        Swal.fire('Done!', data.message, 'success').then(() => location.reload());
-                        }
-                    })
-                    .catch(err => Swal.fire('Error', err.message, 'error'));
-                    });
-                });
-                });
+  btn.addEventListener('click', () => {
+    const id  = btn.dataset.id;
+    const act = btn.textContent.trim().toLowerCase(); // 'ban' or 'unban'
+
+    if (act === 'ban') {
+      Swal.fire({
+        title: 'Ban Resident?',
+        input: 'textarea',
+        inputPlaceholder: 'Reason for ban...',
+        showCancelButton: true,
+        confirmButtonText: 'Ban',
+        preConfirm: reason => {
+          if (!reason) Swal.showValidationMessage('A reason is required');
+          return reason;
+        }
+      }).then(result => {
+        if (!result.isConfirmed) return;
+        Swal.showLoading();
+        fetch(`residents.php?id=${id}&action=ban`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `remarks=${encodeURIComponent(result.value)}`
+        })
+        .then(r => r.json())
+        .then(data => {
+          Swal.close();
+          if (data.success) {
+            Swal.fire('Banned!', data.message, 'success').then(() => location.reload());
+          } else {
+            Swal.fire('Error', data.message, 'error');
+          }
+        })
+        .catch(() => {
+          Swal.close();
+          Swal.fire('Error', 'Network error occurred', 'error');
+        });
+      });
+
+    } else {
+      Swal.fire({
+        title: 'Unban Resident?',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Unban'
+      }).then(res => {
+        if (!res.isConfirmed) return;
+        Swal.showLoading();
+        fetch(`residents.php?id=${id}&action=unban`)
+          .then(r => r.json())
+          .then(data => {
+            Swal.close();
+            if (data.success) {
+              Swal.fire('Unbanned!', data.message, 'success').then(() => location.reload());
+            } else {
+              Swal.fire('Error', data.message, 'error');
+            }
+          })
+          .catch(() => {
+            Swal.close();
+            Swal.fire('Error', 'Network error occurred', 'error');
+          });
+      });
+    }
+  });
+});
             // Delete handling
             document.querySelectorAll('.deleteBtn').forEach(btn => {
                 btn.addEventListener('click', function() {
